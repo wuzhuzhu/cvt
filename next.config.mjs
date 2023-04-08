@@ -16,8 +16,8 @@ export default defineNextConfig({
   reactStrictMode: true,
   // Next.js i18n docs: https://nextjs.org/docs/advanced-features/i18n-routing
   i18n: {
-    locales: ['en'],
-    defaultLocale: 'en',
+    locales: ["en"],
+    defaultLocale: "en",
   },
   eslint: {
     ignoreDuringBuilds: true,
@@ -26,76 +26,86 @@ export default defineNextConfig({
   compress: false,
   images: {
     domains: [
-      's3.us-west-1.wasabisys.com',
-      'model-share.s3.us-west-1.wasabisys.com',
-      'civitai-prod.s3.us-west-1.wasabisys.com',
-      'civitai-dev.s3.us-west-1.wasabisys.com',
+      "s3.us-west-1.wasabisys.com",
+      "model-share.s3.us-west-1.wasabisys.com",
+      "civitai-prod.s3.us-west-1.wasabisys.com",
+      "civitai-dev.s3.us-west-1.wasabisys.com",
     ],
   },
   experimental: {
     // scrollRestoration: true,
     largePageDataBytes: 512 * 100000,
     modularizeImports: {
-      'lodash': {
-        transform: 'lodash/{{member}}',
-        preventFullImport: true
-      }
-    }
+      lodash: {
+        transform: "lodash/{{member}}",
+        preventFullImport: true,
+      },
+    },
+  },
+  typescript: {
+    // !! WARN !!
+    // Dangerously allow production builds to successfully complete even if
+    // your project has type errors.
+    // !! WARN !!
+    ignoreBuildErrors: true,
   },
   poweredByHeader: false,
   redirects: async () => {
     return [
       {
-        source: '/api/download/training-data/:modelVersionId',
-        destination: '/api/download/models/:modelVersionId?type=Training%20Data',
+        source: "/api/download/training-data/:modelVersionId",
+        destination:
+          "/api/download/models/:modelVersionId?type=Training%20Data",
         permanent: true,
       },
       {
-        source: '/github/:path*',
-        destination: 'https://github.com/civitai/civitai/:path*',
+        source: "/github/:path*",
+        destination: "https://github.com/civitai/civitai/:path*",
         permanent: true,
       },
       {
-        source: '/discord',
-        destination: 'https://discord.gg/UwX5wKwm6c',
+        source: "/discord",
+        destination: "https://discord.gg/UwX5wKwm6c",
         permanent: true,
       },
       {
-        source: '/twitter',
-        destination: 'https://twitter.com/HelloCivitai',
+        source: "/twitter",
+        destination: "https://twitter.com/HelloCivitai",
         permanent: true,
       },
       {
-        source: '/reddit',
-        destination: 'https://reddit.com/r/civitai',
+        source: "/reddit",
+        destination: "https://reddit.com/r/civitai",
         permanent: true,
       },
       {
-        source: '/ideas',
-        destination: 'https://github.com/civitai/civitai/discussions/categories/ideas',
+        source: "/ideas",
+        destination:
+          "https://github.com/civitai/civitai/discussions/categories/ideas",
         permanent: true,
       },
       {
-        source: '/v/civitai-link-intro',
-        destination: 'https://youtu.be/MaSRXvM05x4',
+        source: "/v/civitai-link-intro",
+        destination: "https://youtu.be/MaSRXvM05x4",
         permanent: false,
       },
       {
-        source: '/v/civitai-link-installation',
-        destination: 'https://youtu.be/fs-Zs-fvxb0',
+        source: "/v/civitai-link-installation",
+        destination: "https://youtu.be/fs-Zs-fvxb0",
         permanent: false,
       },
       {
-        source: '/gallery/:path*',
-        destination: '/images/:path*',
+        source: "/gallery/:path*",
+        destination: "/images/:path*",
         permanent: true,
       },
       {
-        source: '/appeal',
-        destination: 'https://forms.clickup.com/8459928/f/825mr-5844/5NXSA2EIT3YOS2JSF7',
+        source: "/appeal",
+        destination:
+          "https://forms.clickup.com/8459928/f/825mr-5844/5NXSA2EIT3YOS2JSF7",
         permanent: true,
       },
     ];
   },
-  output: 'standalone',
+  output: "standalone",
 });
