@@ -10,6 +10,13 @@ export const getModelVersionDetailsSelect = Prisma.validator<Prisma.ModelVersion
   baseModel: true,
   earlyAccessTimeFrame: true,
   description: true,
+  rank: {
+    select: {
+      downloadCountAllTime: true,
+      ratingCountAllTime: true,
+      ratingAllTime: true,
+    },
+  },
   files: {
     select: {
       name: true,
@@ -34,7 +41,7 @@ export const getModelVersionDetailsSelect = Prisma.validator<Prisma.ModelVersion
 export const getModelVersionApiSelect = Prisma.validator<Prisma.ModelVersionSelect>()({
   ...getModelVersionDetailsSelect,
   model: {
-    select: { name: true, type: true, nsfw: true, poi: true },
+    select: { name: true, type: true, nsfw: true, poi: true, mode: true },
   },
 });
 const modelVersionApi = Prisma.validator<Prisma.ModelVersionArgs>()({

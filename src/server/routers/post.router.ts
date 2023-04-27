@@ -1,4 +1,4 @@
-import { applyUserPreferences, applyBrowsingMode } from './../middleware.trpc';
+import { applyUserPreferences, applyBrowsingMode, cacheIt } from './../middleware.trpc';
 import { getByIdSchema } from './../schema/base.schema';
 import { publicProcedure } from './../trpc';
 import {
@@ -26,10 +26,12 @@ import {
   updatePostImageSchema,
   getPostTagsSchema,
   postsQuerySchema,
+  getPostsByCategorySchema,
 } from './../schema/post.schema';
 import { dbWrite } from '~/server/db/client';
 import { router, protectedProcedure, middleware } from '~/server/trpc';
 import { throwAuthorizationError } from '~/server/utils/errorHandling';
+import { getPostsByCategory } from '~/server/services/post.service';
 
 const isOwnerOrModerator = middleware(async ({ ctx, next, input = {} }) => {
   if (!ctx.user) throw throwAuthorizationError();
@@ -37,21 +39,39 @@ const isOwnerOrModerator = middleware(async ({ ctx, next, input = {} }) => {
   const { id } = input as { id: number };
 
   const userId = ctx.user.id;
-  let ownerId = userId;
-  if (id) {
-    const isModerator = ctx?.user?.isModerator;
-    ownerId =
-      (await dbWrite.post.findUnique({ where: { id }, select: { userId: true } }))?.userId ?? 0;
-    if (!isModerator) {
-      if (ownerId !== userId) throw throwAuthorizationError();
-    }
+  const isModerator = ctx?.user?.isModerator;
+  if (!isModerator && !!id) {
+    const ownerId = (await dbWrite.post.findUnique({ where: { id }, select: { userId: true } }))
+      ?.userId;
+    if (ownerId !== userId) throw throwAuthorizationError();
   }
 
   return next({
     ctx: {
       // infers the `user` as non-nullable
       user: ctx.user,
-      ownerId,
+    },
+  });
+});
+
+// TODO.hotfix: added this middleware to allow editing images and check if it's the owner
+const isImageOwnerOrModerator = middleware(async ({ ctx, next, input = {} }) => {
+  if (!ctx.user) throw throwAuthorizationError();
+
+  const { id } = input as { id: number };
+
+  const userId = ctx.user.id;
+  const isModerator = ctx?.user?.isModerator;
+  if (!isModerator && !!id) {
+    const ownerId = (await dbWrite.image.findUnique({ where: { id }, select: { userId: true } }))
+      ?.userId;
+    if (ownerId !== userId) throw throwAuthorizationError();
+  }
+
+  return next({
+    ctx: {
+      // infers the `user` as non-nullable
+      user: ctx.user,
     },
   });
 });
@@ -79,7 +99,7 @@ export const postRouter = router({
     .mutation(addPostImageHandler),
   updateImage: protectedProcedure
     .input(updatePostImageSchema)
-    .use(isOwnerOrModerator)
+    .use(isImageOwnerOrModerator)
     .mutation(updatePostImageHandler),
   reorderImages: protectedProcedure
     .input(reorderPostImagesSchema)
@@ -98,4 +118,9 @@ export const postRouter = router({
     .use(isOwnerOrModerator)
     .mutation(removePostTagHandler),
   getResources: publicProcedure.input(getByIdSchema).query(getPostResourcesHandler),
+  getPostsByCategory: publicProcedure
+    .input(getPostsByCategorySchema)
+    .use(applyUserPreferences())
+    .use(cacheIt())
+    .query(({ input }) => getPostsByCategory(input)),
 });

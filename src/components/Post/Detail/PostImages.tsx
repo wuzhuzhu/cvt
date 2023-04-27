@@ -18,7 +18,6 @@ import { ImageMetaProps } from '~/server/schema/image.schema';
 import { trpc } from '~/utils/trpc';
 import { useState, useMemo } from 'react';
 import { RoutedContextLink } from '~/providers/RoutedContextProvider';
-import { useQueryImages } from '~/components/Image/image.utils';
 import { ImagesInfiniteModel } from '~/server/services/image.service';
 
 const maxWidth = 700;
@@ -60,15 +59,8 @@ export function PostImages({
           const width = image.width ?? maxWidth;
           return (
             <RoutedContextLink modal="imageDetailModal" imageId={image.id} postId={postId}>
-              <Paper radius="md" className={classes.frame}>
-                <ImageGuard.ToggleConnect
-                  sx={(theme) => ({
-                    backgroundColor: theme.fn.rgba(theme.colors.red[9], 0.4),
-                    color: 'white',
-                    backdropFilter: 'blur(7px)',
-                    boxShadow: '1px 2px 3px -1px rgba(37,38,43,0.2)',
-                  })}
-                />
+              <Paper radius="md" className={classes.frame} shadow="md" withBorder>
+                <ImageGuard.ToggleConnect position="top-left" />
                 <ImageGuard.Report />
                 <ImageGuard.Content>
                   {({ safe }) => (

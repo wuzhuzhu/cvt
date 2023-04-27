@@ -1,5 +1,5 @@
 import { ImageSort, PostSort, QuestionSort, BrowsingMode } from './enums';
-import { MetricTimeframe } from '@prisma/client';
+import { MetricTimeframe, ModelStatus } from '@prisma/client';
 import { ModelSort } from '~/server/common/enums';
 
 export const constants = {
@@ -62,6 +62,17 @@ export const constants = {
     VAE: 5,
     Negative: 6,
     Archive: 7,
+  },
+  cardSizes: {
+    model: 320,
+    image: 320,
+  },
+  modPublishOnlyStatuses: [ModelStatus.UnpublishedViolation, ModelStatus.Deleted] as ModelStatus[],
+  cacheTime: {
+    postCategories: 60 * 60 * 1,
+  },
+  timeCutOffs: {
+    updatedModel: 2 * 60 * 60 * 1000,
   },
 } as const;
 

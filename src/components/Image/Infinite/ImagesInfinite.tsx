@@ -1,14 +1,14 @@
-import { Paper, Stack, Text, LoadingOverlay } from '@mantine/core';
-import { createContext, useContext, useMemo } from 'react';
+import { Stack, Text, LoadingOverlay, Center, Loader, ThemeIcon } from '@mantine/core';
+import { createContext, useContext, useEffect } from 'react';
 
-import { MasonryGrid2 } from '~/components/MasonryGrid/MasonryGrid2';
-import { trpc } from '~/utils/trpc';
-import { useImageFilters } from '~/providers/FiltersProvider';
 import { ImagesCard } from '~/components/Image/Infinite/ImagesCard';
 import { removeEmpty } from '~/utils/object-helpers';
-import { BrowsingMode } from '~/server/common/enums';
-import { useRouter } from 'next/router';
-import { useQueryImages, parseImagesQuery } from '~/components/Image/image.utils';
+import { ImageSort } from '~/server/common/enums';
+import { useImageFilters, useQueryImages } from '~/components/Image/image.utils';
+import { MasonryColumns } from '~/components/MasonryColumns/MasonryColumns';
+import { useInView } from 'react-intersection-observer';
+import { IconCloudOff } from '@tabler/icons';
+import { MetricTimeframe } from '@prisma/client';
 
 type ImagesInfiniteState = {
   modelId?: number;
@@ -16,9 +16,9 @@ type ImagesInfiniteState = {
   postId?: number;
   username?: string;
   reviewId?: number;
-
   prioritizedUserIds?: number[];
-  browsingMode?: BrowsingMode;
+  period?: MetricTimeframe;
+  sort?: ImageSort;
 };
 const ImagesInfiniteContext = createContext<ImagesInfiniteState | null>(null);
 export const useImagesInfiniteContext = () => {
@@ -28,48 +28,69 @@ export const useImagesInfiniteContext = () => {
 };
 
 type ImagesInfiniteProps = {
-  columnWidth?: number;
   withTags?: boolean;
   filters?: ImagesInfiniteState;
 };
 
 export default function ImagesInfinite({
-  columnWidth = 300,
   withTags,
   filters: filterOverrides = {},
 }: ImagesInfiniteProps) {
-  const router = useRouter();
-  const globalFilters = useImageFilters();
-  const parsedParams = parseImagesQuery(router.query);
-  const baseFilters = { ...parsedParams, ...filterOverrides };
-  const filters = removeEmpty({ ...baseFilters, ...globalFilters, withTags });
+  const { ref, inView } = useInView();
+  const imageFilters = useImageFilters('images');
+  const filters = removeEmpty({ ...imageFilters, ...filterOverrides, withTags });
 
-  const { images, isLoading, fetchNextPage, hasNextPage, isFetchingNextPage, isRefetching } =
-    useQueryImages(filters, { keepPreviousData: true });
+  const { images, isLoading, fetchNextPage, hasNextPage, isRefetching, isFetching } =
+    useQueryImages(filters, {
+      keepPreviousData: true,
+    });
+
+  // #region [infinite data fetching]
+  useEffect(() => {
+    if (inView && !isFetching) {
+      fetchNextPage?.();
+    }
+  }, [fetchNextPage, inView, isFetching]);
+  // #endregion
 
   return (
-    <ImagesInfiniteContext.Provider value={baseFilters}>
-      <MasonryGrid2
-        data={images}
-        hasNextPage={hasNextPage}
-        isRefetching={isRefetching}
-        isFetchingNextPage={isFetchingNextPage}
-        fetchNextPage={fetchNextPage}
-        columnWidth={columnWidth}
-        render={ImagesCard}
-        filters={filters}
-      />
-      {isLoading && (
-        <Paper style={{ minHeight: 200, position: 'relative' }}>
-          <LoadingOverlay visible zIndex={10} />
-        </Paper>
-      )}
-      {!isLoading && !images.length && (
-        <Paper p="xl" sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <Stack>
-            <Text size="xl">There are no images to display</Text>
-          </Stack>
-        </Paper>
+    <ImagesInfiniteContext.Provider value={filters}>
+      {isLoading ? (
+        <Center p="xl">
+          <Loader />
+        </Center>
+      ) : !!images.length ? (
+        <div style={{ position: 'relative' }}>
+          <LoadingOverlay visible={isRefetching ?? false} zIndex={9} />
+          <MasonryColumns
+            data={images}
+            imageDimensions={(data) => {
+              const width = data?.width ?? 450;
+              const height = data?.height ?? 450;
+              return { width, height };
+            }}
+            maxItemHeight={600}
+            render={ImagesCard}
+            itemId={(data) => data.id}
+          />
+          {hasNextPage && !isLoading && !isRefetching && (
+            <Center ref={ref} sx={{ height: 36 }} mt="md">
+              {inView && <Loader />}
+            </Center>
+          )}
+        </div>
+      ) : (
+        <Stack align="center" py="lg">
+          <ThemeIcon size={128} radius={100}>
+            <IconCloudOff size={80} />
+          </ThemeIcon>
+          <Text size={32} align="center">
+            No results found
+          </Text>
+          <Text align="center">
+            {"Try adjusting your search or filters to find what you're looking for"}
+          </Text>
+        </Stack>
       )}
     </ImagesInfiniteContext.Provider>
   );

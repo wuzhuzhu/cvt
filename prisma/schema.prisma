@@ -299,30 +299,37 @@ enum CheckpointType {
   Merge
 }
 
+enum ModelModifier {
+  Archived
+  TakenDown
+}
+
 model Model {
-  id             Int             @id @default(autoincrement())
-  name           String          @db.Citext
-  description    String?
-  type           ModelType
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
-  lastVersionAt  DateTime?
-  nsfw           Boolean         @default(false)
-  tosViolation   Boolean         @default(false)
-  poi            Boolean         @default(false)
-  userId         Int
-  user           User            @relation("creator", fields: [userId], references: [id])
-  status         ModelStatus     @default(Draft)
-  publishedAt    DateTime?
-  fromImport     Import?         @relation(fields: [fromImportId], references: [id], onDelete: SetNull)
-  fromImportId   Int?            @unique
-  meta           Json            @default("{}")
-  deletedAt      DateTime?
-  deletedBy      Int?
-  deletedByUser  User?           @relation("deletedBy", fields: [deletedBy], references: [id], onDelete: SetNull)
-  checkpointType CheckpointType?
-  locked         Boolean         @default(false)
-  underAttack    Boolean         @default(false)
+  id                  Int             @id @default(autoincrement())
+  name                String          @db.Citext
+  description         String?
+  type                ModelType
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+  lastVersionAt       DateTime?
+  nsfw                Boolean         @default(false)
+  tosViolation        Boolean         @default(false)
+  poi                 Boolean         @default(false)
+  userId              Int
+  user                User            @relation("creator", fields: [userId], references: [id])
+  status              ModelStatus     @default(Draft)
+  publishedAt         DateTime?
+  fromImport          Import?         @relation(fields: [fromImportId], references: [id], onDelete: SetNull)
+  fromImportId        Int?            @unique
+  meta                Json            @default("{}")
+  deletedAt           DateTime?
+  deletedBy           Int?
+  deletedByUser       User?           @relation("deletedBy", fields: [deletedBy], references: [id], onDelete: SetNull)
+  checkpointType      CheckpointType?
+  locked              Boolean         @default(false)
+  underAttack         Boolean         @default(false)
+  earlyAccessDeadline DateTime?
+  mode                ModelModifier?
 
   // Licensing
   allowNoCredit         Boolean       @default(true)
@@ -349,6 +356,7 @@ model Model {
   hashes            ModelHash[]
   threads           Thread[]
   resourceReviews   ResourceReview[]
+  metricsDaily      ModelMetricDaily[]
 
   @@index([name])
   @@index([status, nsfw])
@@ -422,6 +430,7 @@ model ModelVersion {
   posts            Post[]
   resourceReviews  ResourceReview[]
   hashes           ModelHash[]
+  metricsDaily     ModelMetricDaily[]
 
   @@index([modelId], type: Hash)
 }
@@ -524,6 +533,19 @@ model ModelVersionMetric {
   @@id([modelVersionId, timeframe])
 }
 
+model ModelMetricDaily {
+  modelId        Int
+  model          Model        @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  modelVersionId Int
+  modelVersion   ModelVersion @relation(fields: [modelVersionId], references: [id], onDelete: Cascade)
+  type           String
+  date           DateTime     @db.Date
+  count          Int
+
+  @@id([modelId, modelVersionId, type, date])
+  @@index(modelVersionId)
+}
+
 enum UserActivityType {
   ModelDownload
   ModelRun
@@ -571,12 +593,22 @@ model Report {
   previouslyReviewedCount Int          @default(0)
   alsoReportedBy          Int[]        @default([]) // UserIds
 
-  status    ReportStatus
-  model     ModelReport?
-  review    ReviewReport?
-  comment   CommentReport?
-  commentV2 CommentV2Report?
-  image     ImageReport?
+  status         ReportStatus
+  model          ModelReport?
+  review         ReviewReport?
+  comment        CommentReport?
+  commentV2      CommentV2Report?
+  image          ImageReport?
+  resourceReview ResourceReviewReport?
+}
+
+model ResourceReviewReport {
+  resourceReviewId Int
+  resourceReview   ResourceReview @relation(fields: [resourceReviewId], references: [id], onDelete: Cascade)
+  reportId         Int            @unique
+  report           Report         @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@id([reportId, resourceReviewId])
 }
 
 model ModelReport {
@@ -667,6 +699,7 @@ model ResourceReview {
   metadata       Json?
   reactions      ResourceReviewReaction[]
   helper         ResourceReviewHelper?
+  reports        ResourceReviewReport[]
 
   @@unique([modelVersionId, userId])
   @@index([modelVersionId], type: Hash)
@@ -756,6 +789,13 @@ enum ImageGenerationProcess {
   inpainting
 }
 
+enum NsfwLevel {
+  None
+  Soft
+  Mature
+  X
+}
+
 model Image {
   id                Int                     @id @default(autoincrement())
   name              String?
@@ -768,7 +808,7 @@ model Image {
   hash              String?
   height            Int?
   width             Int?
-  nsfw              Boolean                 @default(false)
+  nsfw              NsfwLevel               @default(None)
   tosViolation      Boolean                 @default(false)
   analysis          Json?
   generationProcess ImageGenerationProcess?
@@ -881,6 +921,7 @@ model Tag {
   updatedAt  DateTime    @updatedAt
   target     TagTarget[]
   type       TagType     @default(UserGenerated)
+  nsfw       NsfwLevel   @default(None)
   unlisted   Boolean     @default(false)
   unfeatured Boolean     @default(false)
   isCategory Boolean     @default(false)
@@ -954,14 +995,15 @@ model TagsOnQuestions {
 
 model TagsOnImage {
   imageId     Int
-  image       Image    @relation(fields: [imageId], references: [id], onDelete: Cascade)
+  image       Image     @relation(fields: [imageId], references: [id], onDelete: Cascade)
   tagId       Int
-  tag         Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
-  createdAt   DateTime @default(now())
-  automated   Boolean  @default(false)
+  tag         Tag       @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+  automated   Boolean   @default(false)
   confidence  Int?
-  disabled    Boolean  @default(false)
-  needsReview Boolean  @default(false)
+  disabled    Boolean   @default(false)
+  disabledAt  DateTime?
+  needsReview Boolean   @default(false)
 
   @@id([tagId, imageId])
   @@index([imageId], type: Hash)
@@ -2018,11 +2060,12 @@ model PostRank {
 /// @view
 model ImageTag {
   imageId     Int
-  image       Image   @relation(fields: [imageId], references: [id], onDelete: Cascade)
+  image       Image     @relation(fields: [imageId], references: [id], onDelete: Cascade)
   tagId       Int
-  tag         Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  tag         Tag       @relation(fields: [tagId], references: [id], onDelete: Cascade)
   tagName     String
   tagType     TagType
+  tagNsfw     NsfwLevel
   automated   Boolean
   confidence  Int?
   score       Int

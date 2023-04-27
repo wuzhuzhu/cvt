@@ -1,4 +1,4 @@
-import { ModelHashType } from '@prisma/client';
+import { ModelHashType, ModelModifier } from '@prisma/client';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { z } from 'zod';
 
@@ -40,7 +40,7 @@ export async function prepareModelVersionResponse(
   baseUrl: URL,
   images?: AsyncReturnType<typeof getImagesForModelVersion>
 ) {
-  const { files, model, ...version } = modelVersion;
+  const { files, model, rank, ...version } = modelVersion;
   const castedFiles = files as Array<
     Omit<(typeof files)[number], 'metadata'> & { metadata: FileMetadata }
   >;
@@ -52,30 +52,43 @@ export async function prepareModelVersionResponse(
     include: ['meta'],
     imagesPerVersion: 10,
   });
+  const includeDownloadUrl = model.mode !== ModelModifier.Archived;
+  const includeImages = model.mode !== ModelModifier.TakenDown;
 
   return {
     ...version,
-    model,
-    files: castedFiles.map(({ hashes, ...file }) => ({
-      ...file,
-      hashes: hashesAsObject(hashes),
-      name: getDownloadFilename({ model, modelVersion: version, file }),
-      primary: primaryFile.id === file.id,
-      downloadUrl: `${baseUrl.origin}${createModelFileDownloadUrl({
-        versionId: version.id,
-        type: file.type,
-        format: file.metadata.format,
-        primary: primaryFile.id === file.id,
-      })}`,
-    })),
-    images: images.map(({ url, id, userId, name, modelVersionId, ...image }) => ({
-      url: getEdgeUrl(url, { width: 450, name: id.toString() }),
-      ...image,
-    })),
-    downloadUrl: `${baseUrl.origin}${createModelFileDownloadUrl({
-      versionId: version.id,
-      primary: true,
-    })}`,
+    stats: {
+      downloadCount: rank?.downloadCountAllTime ?? 0,
+      ratingCount: rank?.ratingCountAllTime ?? 0,
+      rating: Number(rank?.ratingAllTime?.toFixed(2) ?? 0),
+    },
+    model: { ...model, mode: model.mode == null ? undefined : model.mode },
+    files: includeDownloadUrl
+      ? castedFiles.map(({ hashes, ...file }) => ({
+          ...file,
+          hashes: hashesAsObject(hashes),
+          name: getDownloadFilename({ model, modelVersion: version, file }),
+          primary: primaryFile.id === file.id,
+          downloadUrl: `${baseUrl.origin}${createModelFileDownloadUrl({
+            versionId: version.id,
+            type: file.type,
+            format: file.metadata.format,
+            primary: primaryFile.id === file.id,
+          })}`,
+        }))
+      : [],
+    images: includeImages
+      ? images.map(({ url, id, userId, name, modelVersionId, ...image }) => ({
+          url: getEdgeUrl(url, { width: 450, name: id.toString() }),
+          ...image,
+        }))
+      : [],
+    downloadUrl: includeDownloadUrl
+      ? `${baseUrl.origin}${createModelFileDownloadUrl({
+          versionId: version.id,
+          primary: true,
+        })}`
+      : undefined,
   };
 }
 

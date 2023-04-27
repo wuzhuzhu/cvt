@@ -3,6 +3,7 @@ import { unescape } from 'lodash';
 import { ImageAnalysisInput, ImageMetaProps, imageMetaSchema } from '~/server/schema/image.schema';
 import blocked from './blocklist.json';
 import blockedNSFW from './blocklist-nsfw.json';
+import { NsfwLevel } from '@prisma/client';
 
 export async function getMetadata(file: File) {
   let exif: any; //eslint-disable-line
@@ -67,9 +68,10 @@ const decoder = new TextDecoder('utf-8');
 // #region [parsers]
 const hashesRegex = /, Hashes:\s*({[^}]+})/;
 const badExtensionKeys = ['Resources: ', 'Hashed prompt: ', 'Hashed Negative prompt: '];
+const stripKeys = ['Template: ', 'Negative Template: '] as const;
 const automaticExtraNetsRegex = /<(lora|hypernet):([a-zA-Z0-9_\.]+):([0-9.]+)>/g;
 const automaticNameHash = /([a-zA-Z0-9_\.]+)\(([a-zA-Z0-9]+)\)/;
-const automaticSDKeyMap = new Map<string, keyof ImageMetaProps>([
+const automaticSDKeyMap = new Map<string, string>([
   ['Seed', 'seed'],
   ['CFG scale', 'cfgScale'],
   ['Sampler', 'sampler'],
@@ -81,10 +83,15 @@ const automaticSDParser = createMetadataParser(
   (meta: string) => {
     const metadata: ImageMetaProps = {};
     if (!meta) return metadata;
-    const metaLines = meta.split('\n');
+    const metaLines = meta.split('\n').filter((line) => {
+      // filter out empty lines and any lines that start with a key we want to strip
+      return line.trim() !== '' && !stripKeys.some((key) => line.startsWith(key));
+    });
 
+    let detailsLine = metaLines.find((line) => line.startsWith('Steps: '));
+    // Strip it from the meta lines
+    if (detailsLine) metaLines.splice(metaLines.indexOf(detailsLine), 1);
     // Remove meta keys I wish I hadn't made... :(
-    let detailsLine = metaLines.pop();
     for (const key of badExtensionKeys) {
       if (!detailsLine?.includes(key)) continue;
       detailsLine = detailsLine.split(key)[0];
@@ -193,6 +200,7 @@ function automaticEncoder({ prompt, negativePrompt, resources, ...other }: Image
   const fineDetails = [];
   for (const [k, v] of Object.entries(other)) {
     const key = automaticSDEncodeMap.get(k) ?? k;
+    if (key === 'hashes') continue;
     fineDetails.push(`${key}: ${v}`);
   }
   if (fineDetails.length > 0) lines.push(fineDetails.join(', '));
@@ -209,7 +217,7 @@ const encoders = {
 const escapeRegex = (str: string) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const blockedBoth = '\\(|\\)|\\[|\\]|\\{|\\}|:|\\|';
 const tokenRegex = (word: string) =>
-  new RegExp(`(^|\\s|${blockedBoth})${escapeRegex(word)}(\\s|,|$|${blockedBoth})`, 'm');
+  new RegExp(`(^|\\s|,|${blockedBoth})${escapeRegex(word)}(\\s|,|$|${blockedBoth})`, 'm');
 const blockedRegex = blocked.map((word) => ({
   word,
   regex: tokenRegex(word),
@@ -237,17 +245,22 @@ export const detectNsfwImage = ({ porn, hentai, sexy }: ImageAnalysisInput) => {
 };
 
 const MINOR_DETECTION_AGE = 20;
+/**
+ * @deprecated
+ */
 export const getNeedsReview = ({
   nsfw,
   analysis,
 }: {
-  nsfw?: boolean;
+  nsfw?: NsfwLevel;
   analysis?: ImageAnalysisInput;
 }) => {
-  const assessedNSFW = analysis ? detectNsfwImage(analysis) : true; // Err on side of caution
-  const assessedMinor = analysis?.faces && analysis.faces.some((x) => x.age <= MINOR_DETECTION_AGE);
-  const needsReview = (nsfw === true || assessedNSFW) && assessedMinor;
+  // const assessedNSFW = analysis ? detectNsfwImage(analysis) : true; // Err on side of caution
+  // const assessedMinor = analysis?.faces && analysis.faces.some((x) => x.age <= MINOR_DETECTION_AGE);
+  // const needsReview =
+  //   (nsfw === NsfwLevel.Mature || nsfw === NsfwLevel.X || assessedNSFW) && assessedMinor;
 
-  return needsReview;
+  // return needsReview;
+  return false;
 };
 // #endregion

@@ -13,8 +13,8 @@ import type { AppContext, AppProps } from 'next/app';
 import App from 'next/app';
 import Head from 'next/head';
 import type { Session } from 'next-auth';
-import { getSession, SessionProvider } from 'next-auth/react';
-import { ReactElement, ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import { getSession } from 'next-auth/react';
+import React, { ReactElement, ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 
 import { AppLayout } from '~/components/AppLayout/AppLayout';
 import { trpc } from '~/utils/trpc';
@@ -23,7 +23,7 @@ import { CustomModalsProvider } from './../providers/CustomModalsProvider';
 import { TosProvider } from '~/providers/TosProvider';
 import { CookiesContext, CookiesProvider, parseCookies } from '~/providers/CookiesProvider';
 import { MaintenanceMode } from '~/components/MaintenanceMode/MaintenanceMode';
-import { ImageProcessingProvider } from '~/components/ImageProcessing';
+// import { ImageProcessingProvider } from '~/components/ImageProcessing';
 import { FeatureFlagsProvider } from '~/providers/FeatureFlagsProvider';
 import { getFeatureFlags } from '~/server/services/feature-flags.service';
 import type { FeatureFlags } from '~/server/services/feature-flags.service';
@@ -33,8 +33,15 @@ import { isDev, isMaintenanceMode } from '~/env/other';
 import { RegisterCatchNavigation } from '~/store/catch-navigation.store';
 import { CivitaiLinkProvider } from '~/components/CivitaiLink/CivitaiLinkProvider';
 import { MetaPWA } from '~/components/Meta/MetaPWA';
-import { FiltersProvider, FiltersInput, parseFiltersCookie } from '~/providers/FiltersProvider';
+import {
+  FiltersProviderOld,
+  FiltersInput,
+  parseFiltersCookieOld,
+} from '~/providers/FiltersProviderOld';
 import PlausibleProvider from 'next-plausible';
+import { CivitaiSessionProvider } from '~/components/CivitaiWrapped/CivitaiSessionProvider';
+import { CookiesState, FiltersProvider, parseFilterCookies } from '~/providers/FiltersProvider';
+import { RouterTransition } from '~/components/RouterTransition/RouterTransition';
 
 dayjs.extend(duration);
 dayjs.extend(isBetween);
@@ -51,7 +58,8 @@ type CustomAppProps = {
   session: Session | null;
   colorScheme: ColorScheme;
   cookies: CookiesContext;
-  filters: FiltersInput;
+  filtersOld: FiltersInput;
+  filters: CookiesState;
   flags: FeatureFlags;
   isMaintenanceMode: boolean | undefined;
 }>;
@@ -63,6 +71,7 @@ function MyApp(props: CustomAppProps) {
       session,
       colorScheme: initialColorScheme,
       cookies,
+      filtersOld,
       filters,
       flags,
       isMaintenanceMode,
@@ -89,7 +98,7 @@ function MyApp(props: CustomAppProps) {
   }, [colorScheme]);
 
   const getLayout = useMemo(
-    () => Component.getLayout ?? ((page: any) => <AppLayout>{page}</AppLayout>),
+    () => Component.getLayout ?? ((page: React.ReactElement) => <AppLayout>{page}</AppLayout>),
     [Component.getLayout]
   );
 
@@ -99,11 +108,12 @@ function MyApp(props: CustomAppProps) {
     <>
       <ClientHistoryStore />
       <RegisterCatchNavigation />
-      <SessionProvider session={session}>
+      <RouterTransition />
+      <CivitaiSessionProvider session={session}>
         <CookiesProvider value={cookies}>
-          <FiltersProvider value={filters}>
-            <FeatureFlagsProvider flags={flags}>
-              <ImageProcessingProvider>
+          <FiltersProviderOld value={filtersOld}>
+            <FiltersProvider value={filters}>
+              <FeatureFlagsProvider flags={flags}>
                 <CivitaiLinkProvider>
                   <CustomModalsProvider>
                     <NotificationsProvider>
@@ -114,11 +124,11 @@ function MyApp(props: CustomAppProps) {
                     </NotificationsProvider>
                   </CustomModalsProvider>
                 </CivitaiLinkProvider>
-              </ImageProcessingProvider>
-            </FeatureFlagsProvider>
-          </FiltersProvider>
+              </FeatureFlagsProvider>
+            </FiltersProvider>
+          </FiltersProviderOld>
         </CookiesProvider>
-      </SessionProvider>
+      </CivitaiSessionProvider>
     </>
   );
 
@@ -184,14 +194,15 @@ function MyApp(props: CustomAppProps) {
 
 MyApp.getInitialProps = async (appContext: AppContext) => {
   const initialProps = await App.getInitialProps(appContext);
-  const isClient = appContext.ctx?.req?.url?.startsWith('/_next/data');
-  // if (isClient) return initialProps;
+  const url = appContext.ctx?.req?.url;
+  const isClient = !url || url?.startsWith('/_next/data');
 
   const { pageProps, ...appProps } = initialProps;
-  const colorScheme = getCookie('mantine-color-scheme', appContext.ctx);
+  const colorScheme = getCookie('mantine-color-scheme', appContext.ctx) ?? 'dark';
   const cookies = getCookies(appContext.ctx);
   const parsedCookies = parseCookies(cookies);
-  const filters = parseFiltersCookie(cookies);
+  const filtersOld = parseFiltersCookieOld(cookies);
+  const filters = parseFilterCookies(cookies);
 
   if (isMaintenanceMode) {
     return {
@@ -200,13 +211,21 @@ MyApp.getInitialProps = async (appContext: AppContext) => {
         colorScheme,
         cookies: parsedCookies,
         isMaintenanceMode,
+        filtersOld,
         filters,
       },
       ...appProps,
     };
   } else {
-    const session = !isClient ? await getSession(appContext.ctx) : undefined;
+    const hasAuthCookie =
+      !isClient && Object.keys(cookies).some((x) => x.endsWith('civitai-token'));
+    const session = hasAuthCookie ? await getSession(appContext.ctx) : undefined;
     const flags = getFeatureFlags({ user: session?.user });
+    // Pass this via the request so we can use it in SSR
+    if (session) {
+      (appContext.ctx.req as any)['session'] = session;
+      (appContext.ctx.req as any)['flags'] = flags;
+    }
     return {
       pageProps: {
         ...pageProps,
@@ -214,6 +233,7 @@ MyApp.getInitialProps = async (appContext: AppContext) => {
         cookies: parsedCookies,
         session,
         flags,
+        filtersOld,
         filters,
       },
       ...appProps,

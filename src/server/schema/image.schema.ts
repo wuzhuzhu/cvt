@@ -1,9 +1,11 @@
 import { BrowsingMode, ImageSort } from './../common/enums';
-import { ImageGenerationProcess, MetricTimeframe } from '@prisma/client';
+import { ImageGenerationProcess, MetricTimeframe, NsfwLevel } from '@prisma/client';
 import { z } from 'zod';
 import { constants } from '~/server/common/constants';
 import { tagSchema } from '~/server/schema/tag.schema';
 import { usernameSchema } from '~/server/schema/user.schema';
+import { periodModeSchema } from '~/server/schema/base.schema';
+import { postgresSlugify } from '~/utils/string-helpers';
 
 const stringToNumber = z.preprocess(
   (value) => (value ? Number(value) : undefined),
@@ -79,7 +81,7 @@ export const imageSchema = z.object({
   hash: z.string().nullish(),
   height: z.number().nullish(),
   width: z.number().nullish(),
-  nsfw: z.boolean().optional(),
+  nsfw: z.nativeEnum(NsfwLevel).optional(),
   analysis: imageAnalysisSchema.optional(),
   // tags: z.array(tagSchema).optional(),
   needsReview: z.boolean().optional(),
@@ -107,7 +109,7 @@ export type ImageUpdateSchema = z.infer<typeof imageUpdateSchema>;
 
 export const imageModerationSchema = z.object({
   ids: z.number().array(),
-  nsfw: z.boolean().optional(),
+  nsfw: z.nativeEnum(NsfwLevel).optional(),
   needsReview: z.boolean().optional(),
   delete: z.boolean().optional(),
 });
@@ -133,6 +135,7 @@ export const getGalleryImageSchema = z.object({
   userId: z.number().optional(),
   infinite: z.boolean().default(true),
   period: z.nativeEnum(MetricTimeframe).default(constants.galleryFilterDefaults.period),
+  periodMode: periodModeSchema,
   sort: z.nativeEnum(ImageSort).default(constants.galleryFilterDefaults.sort),
   browsingMode: z.nativeEnum(BrowsingMode).optional(),
   tags: z.array(z.number()).optional(),
@@ -163,7 +166,7 @@ export const updateImageSchema = z.object({
     return value;
   }, imageMetaSchema.nullish()),
   hideMeta: z.boolean().optional(),
-  nsfw: z.boolean().optional(),
+  nsfw: z.nativeEnum(NsfwLevel).optional(),
   resources: z.array(imageResourceUpsertSchema).optional(),
 });
 
@@ -195,6 +198,7 @@ export const getInfiniteImagesSchema = z
     prioritizedUserIds: z.array(z.number()).optional(),
     excludedImageIds: z.array(z.number()).optional(),
     period: z.nativeEnum(MetricTimeframe).default(constants.galleryFilterDefaults.period),
+    periodMode: periodModeSchema,
     sort: z.nativeEnum(ImageSort).default(constants.galleryFilterDefaults.sort),
     tags: z.array(z.number()).optional(),
     generation: z.nativeEnum(ImageGenerationProcess).array().optional(),
@@ -203,6 +207,7 @@ export const getInfiniteImagesSchema = z
     needsReview: z.boolean().optional(),
     tagReview: z.boolean().optional(),
     include: z.array(imageInclude).optional().default(['cosmetics']),
+    excludeCrossPosts: z.boolean().optional(),
   })
   .transform((value) => {
     if (value.withTags) {
@@ -212,6 +217,27 @@ export const getInfiniteImagesSchema = z
     return value;
   });
 
+export type GetImagesByCategoryInput = z.infer<typeof getImagesByCategorySchema>;
+export const getImagesByCategorySchema = z.object({
+  cursor: z.number().optional(),
+  limit: z.number().min(1).max(30).optional(),
+  imageLimit: z.number().min(1).max(30).optional(),
+  sort: z.nativeEnum(ImageSort).optional(),
+  period: z.nativeEnum(MetricTimeframe).optional(),
+  periodMode: periodModeSchema,
+  browsingMode: z.nativeEnum(BrowsingMode).optional(),
+  excludedTagIds: z.array(z.number()).optional(),
+  excludedUserIds: z.array(z.number()).optional(),
+  excludedImageIds: z.array(z.number()).optional(),
+  tags: z.number().array().optional(),
+  username: z
+    .string()
+    .transform((data) => postgresSlugify(data))
+    .nullish(),
+  modelVersionId: z.number().optional(),
+  modelId: z.number().optional(),
+});
+
 export type GetImageInput = z.infer<typeof getImageSchema>;
 export const getImageSchema = z.object({
   id: z.number(),
@@ -220,3 +246,9 @@ export const getImageSchema = z.object({
   // browsingMode: z.nativeEnum(BrowsingMode).optional(),
 });
 // #endregion
+
+export type RemoveImageResourceSchema = z.infer<typeof removeImageResourceSchema>;
+export const removeImageResourceSchema = z.object({
+  imageId: z.number(),
+  resourceId: z.number(),
+});

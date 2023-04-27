@@ -127,7 +127,7 @@ export const createSubscribeSession = async ({
     customer: customerId,
   });
 
-  if (subscriptions.length > 0) {
+  if (subscriptions.filter((x) => x.status !== 'canceled').length > 0) {
     const { url } = await createManageSubscriptionSession({ customerId });
     await invalidateSession(user.id);
     return { sessionId: null, url };
@@ -219,6 +219,11 @@ export const upsertSubscription = async (
   if (user.subscription?.updatedAt && user.subscription.updatedAt >= eventDate) {
     log('Subscription already up to date');
     return;
+  }
+
+  if (user.subscriptionId && user.subscriptionId !== subscription.id) {
+    log('Subscription id changed, deleting old subscription');
+    await dbWrite.customerSubscription.delete({ where: { id: user.subscriptionId } });
   }
 
   const data = {

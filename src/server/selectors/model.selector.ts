@@ -77,6 +77,7 @@ export const getAllModelsWithVersionsSelect = Prisma.validator<Prisma.ModelSelec
   allowCommercialUse: true,
   allowDerivatives: true,
   allowDifferentLicense: true,
+  mode: true,
   rank: {
     select: {
       downloadCountAllTime: true,
@@ -123,6 +124,9 @@ export const modelWithDetailsSelect = Prisma.validator<Prisma.ModelSelect>()({
   licenses: true,
   publishedAt: true,
   locked: true,
+  meta: true,
+  earlyAccessDeadline: true,
+  mode: true,
   reportStats: {
     select: {
       ownershipProcessing: true,
@@ -206,5 +210,5 @@ export const modelWithDetailsSelect = Prisma.validator<Prisma.ModelSelect>()({
       favoriteCountAllTime: true,
     },
   },
-  tagsOnModels: { select: { tag: { select: { id: true, name: true } } } },
+  tagsOnModels: { select: { tag: { select: { id: true, name: true, isCategory: true } } } },
 });

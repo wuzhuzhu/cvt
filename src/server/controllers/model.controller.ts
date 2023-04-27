@@ -1,11 +1,19 @@
 import { modelHashSelect } from './../selectors/modelHash.selector';
-import { ModelStatus, ModelHashType, Prisma, UserActivityType } from '@prisma/client';
+import {
+  ModelStatus,
+  ModelHashType,
+  Prisma,
+  UserActivityType,
+  ModelModifier,
+} from '@prisma/client';
 import { TRPCError } from '@trpc/server';
 
 import { dbWrite, dbRead } from '~/server/db/client';
 import { Context } from '~/server/createContext';
 import { GetAllSchema, GetByIdInput } from '~/server/schema/base.schema';
 import {
+  ChangeModelModifierSchema,
+  DeclineReviewSchema,
   DeleteModelSchema,
   GetAllModelsOutput,
   GetDownloadSchema,
@@ -33,7 +41,7 @@ import {
   publishModelById,
   restoreModelById,
   toggleLockModel,
-  updateModel,
+  unpublishModelById,
   updateModelById,
   upsertModel,
 } from '~/server/services/model.service';
@@ -45,7 +53,7 @@ import {
 } from '~/server/utils/errorHandling';
 import { DEFAULT_PAGE_SIZE, getPagination, getPagingData } from '~/server/utils/pagination-helpers';
 import { getFeatureFlags } from '~/server/services/feature-flags.service';
-import { getEarlyAccessDeadline, isEarlyAccess } from '~/server/utils/early-access-helpers';
+import { getEarlyAccessDeadline } from '~/server/utils/early-access-helpers';
 import { BaseModel, constants, ModelFileType } from '~/server/common/constants';
 import { getDownloadFilename } from '~/pages/api/download/models/[modelVersionId]';
 import { getGetUrl } from '~/utils/s3-utils';
@@ -63,14 +71,20 @@ export const getModelHandler = async ({ input, ctx }: { input: GetByIdInput; ctx
     const model = await getModel({
       ...input,
       user: ctx.user,
-      select: { ...modelWithDetailsSelect, meta: true },
+      select: modelWithDetailsSelect,
     });
     if (!model) {
       throw throwNotFoundError(`No model with id ${input.id}`);
     }
 
     const features = getFeatureFlags({ user: ctx.user });
-    const modelVersionIds = model.modelVersions.map((version) => version.id);
+    const filteredVersions = model.modelVersions.filter((version) => {
+      const isOwner = ctx.user?.id === model.user.id || ctx.user?.isModerator;
+      if (isOwner) return true;
+
+      return version.status === ModelStatus.Published;
+    });
+    const modelVersionIds = filteredVersions.map((version) => version.id);
     const posts = await dbRead.post.findMany({
       where: {
         modelVersionId: { in: modelVersionIds },
@@ -83,7 +97,7 @@ export const getModelHandler = async ({ input, ctx }: { input: GetByIdInput; ctx
     return {
       ...model,
       meta: model.meta as ModelMeta | null,
-      modelVersions: model.modelVersions.map((version) => {
+      modelVersions: filteredVersions.map((version) => {
         let earlyAccessDeadline = features.earlyAccessModel
           ? getEarlyAccessDeadline({
               versionCreatedAt: version.createdAt,
@@ -93,7 +107,9 @@ export const getModelHandler = async ({ input, ctx }: { input: GetByIdInput; ctx
           : undefined;
         if (earlyAccessDeadline && new Date() > earlyAccessDeadline)
           earlyAccessDeadline = undefined;
-        const canDownload = !earlyAccessDeadline || !!ctx.user?.tier || !!ctx.user?.isModerator;
+        const canDownload =
+          model.mode !== ModelModifier.Archived &&
+          (!earlyAccessDeadline || !!ctx.user?.tier || !!ctx.user?.isModerator);
 
         // sort version files by file type, 'Model' type goes first
         const files = [...version.files].sort((a, b) => {
@@ -157,6 +173,8 @@ export const getModelsInfiniteHandler = async ({
       lastVersionAt: true,
       publishedAt: true,
       locked: true,
+      earlyAccessDeadline: true,
+      mode: true,
       rank: {
         select: {
           [`downloadCount${input.period}`]: true,
@@ -206,7 +224,7 @@ export const getModelsInfiniteHandler = async ({
   const result = {
     nextCursor,
     items: items
-      .map(({ publishedAt, hashes, modelVersions, ...model }) => {
+      .map(({ hashes, modelVersions, rank, ...model }) => {
         const [version] = modelVersions;
         if (!version) return null;
         const [image] = images.filter((i) => i.modelVersionId === version.id);
@@ -215,14 +233,6 @@ export const getModelsInfiniteHandler = async ({
           (input.user || input.username);
         if (!image && !showImageless) return null;
 
-        const rank = model.rank; // NOTE: null before metrics kick in
-        const earlyAccess =
-          !version ||
-          isEarlyAccess({
-            versionCreatedAt: version.createdAt,
-            publishedAt,
-            earlyAccessTimeframe: version.earlyAccessTimeFrame,
-          });
         return {
           ...model,
           hashes: hashes.map((hash) => hash.hash.toLowerCase()),
@@ -233,8 +243,11 @@ export const getModelsInfiniteHandler = async ({
             ratingCount: rank?.[`ratingCount${input.period}`] ?? 0,
             rating: rank?.[`rating${input.period}`] ?? 0,
           },
-          image: image as (typeof images)[0] | undefined,
-          earlyAccess,
+          image:
+            model.mode !== ModelModifier.TakenDown
+              ? (image as (typeof images)[0] | undefined)
+              : undefined,
+          // earlyAccess,
         };
       })
       .filter(isDefined),
@@ -318,36 +331,6 @@ export const upsertModelHandler = async ({
   }
 };
 
-export const updateModelHandler = async ({
-  ctx,
-  input,
-}: {
-  input: ModelInput & { id: number };
-  ctx: DeepNonNullable<Context>;
-}) => {
-  const { user } = ctx;
-  const { id, poi, nsfw } = input;
-
-  if (poi && nsfw) {
-    throw throwBadRequestError(
-      `Models or images depicting real people in NSFW contexts are not permitted.`
-    );
-  }
-
-  try {
-    const userId = user.id;
-    const model = await updateModel({ ...input, userId });
-    if (!model) {
-      throw throwNotFoundError(`No model with id ${id}`);
-    }
-
-    return model;
-  } catch (error) {
-    if (error instanceof TRPCError) throw error;
-    else throw throwDbError(error);
-  }
-};
-
 export const publishModelHandler = async ({
   input,
   ctx,
@@ -363,10 +346,8 @@ export const publishModelHandler = async ({
     if (!model) throw throwNotFoundError(`No model with id ${input.id}`);
 
     const { isModerator } = ctx.user;
-    if (model.status === ModelStatus.UnpublishedViolation && !isModerator)
-      throw throwAuthorizationError(
-        'You are not authorized to publish this model because it has been reported as ToS Violation'
-      );
+    if (!isModerator && constants.modPublishOnlyStatuses.includes(model.status))
+      throw throwAuthorizationError('You are not authorized to publish this model');
 
     const republishing = model.status !== ModelStatus.Draft;
     const { needsReview, unpublishedReason, unpublishedAt, ...meta } =
@@ -380,9 +361,15 @@ export const publishModelHandler = async ({
   }
 };
 
-export const unpublishModelHandler = async ({ input }: { input: UnpublishModelSchema }) => {
+export const unpublishModelHandler = async ({
+  input,
+  ctx,
+}: {
+  input: UnpublishModelSchema;
+  ctx: DeepNonNullable<Context>;
+}) => {
   try {
-    const { id, reason } = input;
+    const { id } = input;
     const model = await dbRead.model.findUnique({
       where: { id },
       select: { meta: true },
@@ -390,22 +377,7 @@ export const unpublishModelHandler = async ({ input }: { input: UnpublishModelSc
     if (!model) throw throwNotFoundError(`No model with id ${input.id}`);
 
     const meta = (model.meta as ModelMeta | null) || {};
-    const updatedModel = await updateModelById({
-      id,
-      data: {
-        status: reason ? ModelStatus.UnpublishedViolation : ModelStatus.Unpublished,
-        publishedAt: null,
-        meta: reason
-          ? { ...meta, unpublishedReason: reason, unpublishedAt: new Date().toISOString() }
-          : undefined,
-        modelVersions: {
-          updateMany: {
-            where: { status: ModelStatus.Published },
-            data: { status: ModelStatus.Unpublished, publishedAt: null },
-          },
-        },
-      },
-    });
+    const updatedModel = await unpublishModelById({ ...input, meta, user: ctx.user });
 
     return updatedModel;
   } catch (error) {
@@ -467,8 +439,13 @@ export const getModelsWithVersionsHandler = async ({
       count: rawResults.count,
       items: rawResults.items.map(({ rank, modelVersions, ...model }) => ({
         ...model,
-        modelVersions: modelVersions.map((modelVersion) => ({
+        modelVersions: modelVersions.map(({ rank, ...modelVersion }) => ({
           ...modelVersion,
+          stats: {
+            downloadCount: rank?.downloadCountAllTime ?? 0,
+            ratingCount: rank?.ratingCountAllTime ?? 0,
+            rating: Number(rank?.ratingAllTime?.toFixed(2) ?? 0),
+          },
           images: images
             .filter((image) => image.modelVersionId === modelVersion.id)
             .map(({ modelVersionId, name, userId, ...image }) => ({
@@ -505,6 +482,7 @@ export const getModelWithVersionsHandler = async ({
       favorites: false,
       hidden: false,
       period: 'AllTime',
+      periodMode: 'published',
     },
     ctx,
   });
@@ -547,7 +525,7 @@ export const getDownloadCommandHandler = async ({
       select: {
         id: true,
         model: {
-          select: { id: true, name: true, type: true, status: true, userId: true },
+          select: { id: true, name: true, type: true, status: true, userId: true, mode: true },
         },
         images: {
           select: {
@@ -592,7 +570,10 @@ export const getDownloadCommandHandler = async ({
     const isMod = ctx.user?.isModerator;
     const userId = ctx.user?.id;
     const canDownload =
-      isMod || modelVersion?.model?.status === 'Published' || modelVersion.model.userId === userId;
+      modelVersion.model.mode !== ModelModifier.Archived &&
+      (isMod ||
+        modelVersion?.model?.status === 'Published' ||
+        modelVersion.model.userId === userId);
     if (!canDownload) throw throwNotFoundError();
 
     await dbWrite.userActivity.create({
@@ -783,6 +764,88 @@ export const requestReviewHandler = async ({ input }: { input: GetByIdInput }) =
       meta: { ...meta, needsReview: true },
     });
 
+    return updatedModel;
+  } catch (error) {
+    if (error instanceof TRPCError) error;
+    else throw throwDbError(error);
+  }
+};
+
+export const declineReviewHandler = async ({
+  input,
+  ctx,
+}: {
+  input: DeclineReviewSchema;
+  ctx: DeepNonNullable<Context>;
+}) => {
+  try {
+    if (!ctx.user.isModerator) throw throwAuthorizationError();
+
+    const model = await dbRead.model.findUnique({
+      where: { id: input.id },
+      select: { id: true, name: true, status: true, type: true, meta: true, userId: true },
+    });
+    if (!model) throw throwNotFoundError(`No model with id ${input.id}`);
+
+    const meta = (model.meta as ModelMeta | null) || {};
+    if (model.status !== ModelStatus.UnpublishedViolation && !meta?.needsReview)
+      throw throwBadRequestError(
+        'Cannot decline a review for this model because it is not in the correct status'
+      );
+
+    const updatedModel = await upsertModel({
+      ...model,
+      meta: {
+        ...meta,
+        declinedReason: input.reason,
+        decliendAt: new Date().toISOString(),
+        needsReview: false,
+      },
+    });
+
+    return updatedModel;
+  } catch (error) {
+    if (error instanceof TRPCError) error;
+    else throw throwDbError(error);
+  }
+};
+
+export const changeModelModifierHandler = async ({
+  input,
+  ctx,
+}: {
+  input: ChangeModelModifierSchema;
+  ctx: DeepNonNullable<Context>;
+}) => {
+  try {
+    const { id, mode } = input;
+    // If changing to takenDown, only moderators can do it
+    if (mode === ModelModifier.TakenDown && !ctx.user.isModerator) throw throwAuthorizationError();
+
+    const model = await getModel({ id, select: { id: true, meta: true, mode: true } });
+    if (!model) throw throwNotFoundError(`No model with id ${id}`);
+    if (model.mode === mode) throw throwBadRequestError(`Model is already ${mode}`);
+    // If removing mode, but model is taken down, only moderators can do it
+    if (model.mode === ModelModifier.TakenDown && mode === null && !ctx.user.isModerator)
+      throw throwAuthorizationError();
+
+    const { archivedAt, takenDownAt, archivedBy, takenDownBy, ...restMeta } =
+      (model.meta as ModelMeta | null) || {};
+    let updatedMeta: ModelMeta = {};
+    if (mode === ModelModifier.Archived)
+      updatedMeta = { ...restMeta, archivedAt: new Date().toISOString(), archivedBy: ctx.user.id };
+    else if (mode === ModelModifier.TakenDown)
+      updatedMeta = {
+        ...restMeta,
+        takenDownAt: new Date().toISOString(),
+        takenDownBy: ctx.user.id,
+      };
+    else updatedMeta = restMeta;
+
+    const updatedModel = await updateModelById({
+      id,
+      data: { mode, meta: { ...updatedMeta } },
+    });
     return updatedModel;
   } catch (error) {
     if (error instanceof TRPCError) error;

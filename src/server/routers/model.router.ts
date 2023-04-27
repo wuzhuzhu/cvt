@@ -2,7 +2,9 @@ import { z } from 'zod';
 
 import { env } from '~/env/server.mjs';
 import {
+  changeModelModifierHandler,
   createModelHandler,
+  declineReviewHandler,
   deleteModelHandler,
   getDownloadCommandHandler,
   getModelDetailsForReviewHandler,
@@ -20,12 +22,13 @@ import {
   restoreModelHandler,
   toggleModelLockHandler,
   unpublishModelHandler,
-  updateModelHandler,
   upsertModelHandler,
 } from '~/server/controllers/model.controller';
 import { dbRead } from '~/server/db/client';
 import { getAllQuerySchema, getByIdSchema } from '~/server/schema/base.schema';
 import {
+  changeModelModifierSchema,
+  declineReviewSchema,
   deleteModelSchema,
   GetAllModelsOutput,
   getAllModelsSchema,
@@ -142,11 +145,6 @@ export const modelRouter = router({
   getMyDraftModels: protectedProcedure.input(getAllQuerySchema).query(getMyDraftModelsHandler),
   add: guardedProcedure.input(modelSchema).use(checkFilesExistence).mutation(createModelHandler),
   upsert: guardedProcedure.input(modelUpsertSchema).mutation(upsertModelHandler),
-  update: protectedProcedure
-    .input(modelSchema.extend({ id: z.number() }))
-    .use(isOwnerOrModerator)
-    .use(checkFilesExistence)
-    .mutation(updateModelHandler),
   delete: protectedProcedure
     .input(deleteModelSchema)
     .use(isOwnerOrModerator)
@@ -176,9 +174,14 @@ export const modelRouter = router({
     .mutation(toggleModelLockHandler),
   getSimple: publicProcedure
     .input(getByIdSchema)
-    .query(({ input }) => getSimpleModelWithVersions(input)),
+    .query(({ input, ctx }) => getSimpleModelWithVersions({ id: input.id, ctx })),
   requestReview: protectedProcedure
     .input(getByIdSchema)
     .use(isOwnerOrModerator)
     .mutation(requestReviewHandler),
+  declineReview: protectedProcedure.input(declineReviewSchema).mutation(declineReviewHandler),
+  changeMode: protectedProcedure
+    .input(changeModelModifierSchema)
+    .use(isOwnerOrModerator)
+    .mutation(changeModelModifierHandler),
 });

@@ -1,4 +1,5 @@
 // @ts-check
+import { withPlausibleProxy } from 'next-plausible';
 
 /**
  * Don't be scared of the generics here.

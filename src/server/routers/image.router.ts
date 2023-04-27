@@ -1,4 +1,4 @@
-import { applyBrowsingMode } from './../middleware.trpc';
+import { applyBrowsingMode, cacheIt } from './../middleware.trpc';
 import {
   getImageDetailHandler,
   getImageHandler,
@@ -10,6 +10,8 @@ import {
   updateImageSchema,
   getInfiniteImagesSchema,
   imageModerationSchema,
+  removeImageResourceSchema,
+  getImagesByCategorySchema,
 } from './../schema/image.schema';
 import {
   deleteImageHandler,
@@ -40,6 +42,7 @@ import {
 } from '~/server/trpc';
 import { throwAuthorizationError } from '~/server/utils/errorHandling';
 import { applyUserPreferences } from '~/server/middleware.trpc';
+import { getImagesByCategory, removeImageResource } from '~/server/services/image.service';
 
 const isOwnerOrModerator = middleware(async ({ ctx, next, input = {} }) => {
   if (!ctx.user) throw throwAuthorizationError();
@@ -106,4 +109,12 @@ export const imageRouter = router({
     .query(getImagesAsPostsInfiniteHandler),
   get: publicProcedure.input(getByIdSchema).query(getImageHandler),
   getResources: publicProcedure.input(getByIdSchema).query(getImageResourcesHandler),
+  removeResource: protectedProcedure
+    .input(getByIdSchema)
+    .mutation(({ input, ctx }) => removeImageResource({ ...input, user: ctx.user })),
+  getImagesByCategory: publicProcedure
+    .input(getImagesByCategorySchema)
+    .use(applyUserPreferences())
+    // .use(cacheIt())
+    .query(({ input, ctx }) => getImagesByCategory({ ...input, userId: ctx.user?.id })),
 });

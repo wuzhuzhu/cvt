@@ -14,24 +14,9 @@ import { ImageMetaPopover } from '~/components/ImageMeta/ImageMeta';
 import { IconInfoCircle } from '@tabler/icons';
 import { useRouter } from 'next/router';
 
-export function ImagesCard({
-  data: image,
-  width: cardWidth,
-}: {
-  data: ImagesInfiniteModel;
-  width: number;
-}) {
-  const router = useRouter();
+export function ImagesCard({ data: image, height }: { data: ImagesInfiniteModel; height: number }) {
   const { classes } = useStyles();
-  const { modelId, postId, username, modelVersionId } = useImagesInfiniteContext();
-
-  const height = useMemo(() => {
-    if (!image.width || !image.height) return 300;
-    const width = cardWidth > 0 ? cardWidth : 300;
-    const aspectRatio = image.width / image.height;
-    const imageHeight = Math.floor(width / aspectRatio);
-    return Math.min(imageHeight, 600);
-  }, [cardWidth, image.width, image.height]);
+  const filters = useImagesInfiniteContext();
 
   const tags = useMemo(() => {
     if (!image.tags) return undefined;
@@ -41,7 +26,7 @@ export function ImagesCard({
   const showVotes = tags && Array.isArray(tags) && !!tags.length;
 
   return (
-    <InView triggerOnce>
+    <InView rootMargin="600px">
       {({ inView, ref }) => (
         <MasonryCard withBorder shadow="sm" p={0} height={height} ref={ref}>
           {inView && (
@@ -53,23 +38,8 @@ export function ImagesCard({
                     {({ safe }) => (
                       <>
                         <ImageGuard.Report />
-                        <ImageGuard.ToggleImage
-                          sx={(theme) => ({
-                            backgroundColor: theme.fn.rgba(theme.colors.red[9], 0.4),
-                            color: 'white',
-                            backdropFilter: 'blur(7px)',
-                            boxShadow: '1px 2px 3px -1px rgba(37,38,43,0.2)',
-                          })}
-                        />
-                        <RoutedContextLink
-                          modal="imageDetailModal"
-                          imageId={image.id}
-                          modelId={modelId}
-                          postId={postId}
-                          username={username}
-                          modelVersionId={modelVersionId}
-                          {...router.query}
-                        >
+                        <ImageGuard.ToggleImage position="top-left" />
+                        <RoutedContextLink modal="imageDetailModal" imageId={image.id} {...filters}>
                           {!safe ? (
                             <AspectRatio ratio={(image?.width ?? 1) / (image?.height ?? 1)}>
                               <MediaHash {...image} />

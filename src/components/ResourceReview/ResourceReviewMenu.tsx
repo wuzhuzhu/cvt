@@ -1,26 +1,21 @@
-import { ActionIcon, MantineNumberSize, Menu, MenuProps, Text } from '@mantine/core';
-import { closeAllModals, closeModal, openConfirmModal } from '@mantine/modals';
+import { ActionIcon, Loader, MantineNumberSize, Menu, MenuProps, Text } from '@mantine/core';
+import { closeAllModals, openConfirmModal } from '@mantine/modals';
 import {
-  IconBan,
   IconCalculator,
   IconCalculatorOff,
   IconDotsVertical,
   IconEdit,
   IconFlag,
   IconLock,
-  IconLockOpen,
-  IconSwitchHorizontal,
   IconTrash,
 } from '@tabler/icons';
-import { SessionUser } from 'next-auth';
 
+import { ToggleLockComments } from '~/components/CommentsV2';
 import { LoginRedirect } from '~/components/LoginRedirect/LoginRedirect';
-import { DeleteResourceReviewButton } from '~/components/ResourceReview/DeleteResourceReviewButton';
 import { useCurrentUser } from '~/hooks/useCurrentUser';
 import { openContext } from '~/providers/CustomModalsProvider';
-import { closeRoutedContext, openRoutedContext } from '~/providers/RoutedContextProvider';
+import { closeRoutedContext } from '~/providers/RoutedContextProvider';
 import { ReportEntity } from '~/server/schema/report.schema';
-import { ReviewGetAllItem } from '~/types/router';
 import { showErrorNotification } from '~/utils/notifications';
 import { trpc } from '~/utils/trpc';
 
@@ -34,7 +29,14 @@ export function ResourceReviewMenu({
   reviewId: number;
   userId: number;
   size?: MantineNumberSize;
-  review: { id: number; rating: number; details?: string; modelId: number; modelVersionId: number };
+  review: {
+    id: number;
+    rating: number;
+    details?: string;
+    modelId: number;
+    modelVersionId: number;
+    exclude?: boolean;
+  };
 } & MenuProps) {
   const currentUser = useCurrentUser();
 
@@ -42,8 +44,64 @@ export function ResourceReviewMenu({
   const isOwner = currentUser?.id === userId;
   const isMuted = currentUser?.muted ?? false;
 
-  // temp - remove when other controls are in place
-  if (!isOwner && !isMod) return null;
+  const queryUtils = trpc.useContext();
+  const deleteMutation = trpc.resourceReview.delete.useMutation({
+    onSuccess: async () => {
+      await queryUtils.resourceReview.invalidate();
+      closeAllModals();
+      closeRoutedContext();
+    },
+  });
+  const handleDelete = () => {
+    openConfirmModal({
+      title: 'Delete Review',
+      children: (
+        <Text size="sm">
+          Are you sure you want to delete this review? This action is destructive and cannot be
+          reverted.
+        </Text>
+      ),
+      centered: true,
+      labels: { confirm: 'Delete Review', cancel: "No, don't delete it" },
+      confirmProps: { color: 'red', loading: deleteMutation.isLoading },
+      closeOnConfirm: false,
+      onConfirm: () => {
+        deleteMutation.mutate({ id: reviewId });
+      },
+    });
+  };
+
+  const excludeMutation = trpc.resourceReview.toggleExclude.useMutation({
+    async onSuccess() {
+      await queryUtils.resourceReview.invalidate();
+      closeAllModals();
+    },
+    onError(error) {
+      showErrorNotification({
+        error: new Error(error.message),
+        title: 'Could not exclude review',
+      });
+    },
+  });
+  const handleExcludeReview = () => {
+    openConfirmModal({
+      title: 'Exclude Review',
+      children: (
+        <Text size="sm">
+          Are you sure you want to exclude this review from the average score of this model? You
+          will not be able to revert this.
+        </Text>
+      ),
+      centered: true,
+      labels: { confirm: 'Exclude Review', cancel: "No, don't exclude it" },
+      confirmProps: { color: 'red', loading: deleteMutation.isLoading },
+      closeOnConfirm: false,
+      onConfirm: () => {
+        excludeMutation.mutate({ id: review.id });
+      },
+    });
+  };
+  const handleUnexcludeReview = () => excludeMutation.mutate({ id: review.id });
 
   return (
     <Menu position="bottom-end" withinPortal {...props}>
@@ -55,63 +113,57 @@ export function ResourceReviewMenu({
       <Menu.Dropdown>
         {(isOwner || isMod) && (
           <>
-            <DeleteResourceReviewButton reviewId={reviewId}>
-              {({ onClick }) => (
-                <Menu.Item
-                  icon={<IconTrash size={14} stroke={1.5} />}
-                  color="red"
-                  onClick={onClick}
-                >
-                  Delete review
-                </Menu.Item>
-              )}
-            </DeleteResourceReviewButton>
             <Menu.Item
-              icon={<IconEdit size={14} stroke={1.5} />}
-              onClick={() => openContext('resourceReviewEdit', review)}
+              icon={<IconTrash size={14} stroke={1.5} />}
+              color="red"
+              onClick={handleDelete}
             >
-              Edit review
+              Delete review
             </Menu.Item>
-            {/* {((!review.locked && !isMuted) || isMod) && (
+            {!isMuted && (
               <Menu.Item
                 icon={<IconEdit size={14} stroke={1.5} />}
-                onClick={() => openRoutedContext('reviewEdit', { reviewId: review.id })}
+                onClick={() => openContext('resourceReviewEdit', review)}
               >
                 Edit review
               </Menu.Item>
-            )} */}
-            {/* {isMod && !hideLockOption && (
-              <Menu.Item
-                icon={
-                  review.locked ? (
-                    <IconLockOpen size={14} stroke={1.5} />
-                  ) : (
-                    <IconLock size={14} stroke={1.5} />
-                  )
-                }
-                onClick={handleToggleLockThread}
-              >
-                {review.locked ? 'Unlock review' : 'Lock review'}
-              </Menu.Item>
-            )} */}
-
-            {/* {isMod && (
-              <>
-                <Menu.Item
-                  icon={<IconSwitchHorizontal size={14} stroke={1.5} />}
-                  onClick={handleConvertToComment}
-                >
-                  Convert to comment
-                </Menu.Item>
-                <Menu.Item icon={<IconBan size={14} stroke={1.5} />} onClick={handleTosViolation}>
-                  Remove as TOS Violation
-                </Menu.Item>
-              </>
-            )} */}
+            )}
           </>
         )}
-        {/* {(!currentUser || !isOwner) && (
-          <LoginRedirect reason="report-model">
+        {isMod && (
+          <>
+            {!review.exclude ? (
+              <Menu.Item
+                icon={<IconCalculatorOff size={14} stroke={1.5} />}
+                onClick={handleExcludeReview}
+              >
+                Exclude from average
+              </Menu.Item>
+            ) : (
+              <Menu.Item
+                icon={<IconCalculator size={14} stroke={1.5} />}
+                onClick={handleUnexcludeReview}
+              >
+                Unexclude from average
+              </Menu.Item>
+            )}
+            <ToggleLockComments entityId={reviewId} entityType="review">
+              {({ toggle, locked, isLoading }) => {
+                return (
+                  <Menu.Item
+                    icon={isLoading ? <Loader size={14} /> : <IconLock size={14} stroke={1.5} />}
+                    onClick={toggle}
+                    disabled={isLoading}
+                  >
+                    {locked ? 'Unlock' : 'Lock'} Comments
+                  </Menu.Item>
+                );
+              }}
+            </ToggleLockComments>
+          </>
+        )}
+        {!isOwner && (
+          <LoginRedirect reason="report-review">
             <Menu.Item
               icon={<IconFlag size={14} stroke={1.5} />}
               onClick={() =>
@@ -124,7 +176,7 @@ export function ResourceReviewMenu({
               Report
             </Menu.Item>
           </LoginRedirect>
-        )} */}
+        )}
       </Menu.Dropdown>
     </Menu>
   );

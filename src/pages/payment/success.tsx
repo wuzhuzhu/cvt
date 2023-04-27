@@ -16,16 +16,16 @@ import { useEffect } from 'react';
 import { EdgeImage } from '~/components/EdgeImage/EdgeImage';
 import { useCurrentUser } from '~/hooks/useCurrentUser';
 import { enterFall, jelloVerical } from '~/libs/animations';
-import { reloadSession } from '~/utils/next-auth-helpers';
 
 export default function PaymentSuccess() {
   const router = useRouter();
   const { cid } = router.query as { cid: string };
-  const { customerId } = useCurrentUser() ?? {};
+  const { customerId, refresh } = useCurrentUser() ?? {};
 
+  // Only run once - otherwise we'll get an infinite loop
   useEffect(() => {
-    reloadSession();
-  }, []);
+    refresh?.();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (cid !== customerId?.slice(-8)) {
     router.replace('/');

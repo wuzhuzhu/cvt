@@ -25,7 +25,7 @@ import { ImageMetaPopover } from '~/components/ImageMeta/ImageMeta';
 import { ImagePreview } from '~/components/ImagePreview/ImagePreview';
 import { Reactions } from '~/components/Reaction/Reactions';
 import { useCurrentUser } from '~/hooks/useCurrentUser';
-import { useFiltersContext } from '~/providers/FiltersProvider';
+import { useFiltersContext } from '~/providers/FiltersProviderOld';
 import { RoutedContextLink } from '~/providers/RoutedContextProvider';
 import { BrowsingMode, ImageSort } from '~/server/common/enums';
 import { ImageMetaProps } from '~/server/schema/image.schema';
@@ -117,7 +117,6 @@ export function ModelCarousel({
     prioritizedUserIds: [modelUserId],
     period: 'AllTime',
     sort: ImageSort.MostReactions,
-    browsingMode: currentUser ? undefined : BrowsingMode.SFW,
     limit,
   });
 
@@ -218,7 +217,7 @@ export function ModelCarousel({
                 {({ safe }) => (
                   <Center style={{ height: '100%', width: '100%' }}>
                     <div style={{ width: '100%', position: 'relative' }}>
-                      <ImageGuard.ToggleConnect />
+                      <ImageGuard.ToggleConnect position="top-left" />
                       <ImageGuard.Report />
                       <RoutedContextLink
                         modal="imageDetailModal"

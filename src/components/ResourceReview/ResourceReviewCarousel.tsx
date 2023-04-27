@@ -9,6 +9,7 @@ import {
   useMantineTheme,
   Button,
   Container,
+  Text,
 } from '@mantine/core';
 import { useMediaQuery } from '@mantine/hooks';
 import { IconInfoCircle } from '@tabler/icons';
@@ -32,18 +33,18 @@ export function ResourceReviewCarousel({
   modelVersionId: number;
   reviewId: number;
 }) {
-  const theme = useMantineTheme();
+  const { classes, theme } = useStyles();
   const mobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm}px)`);
-  const { classes } = useStyles();
 
   const filters = {
     username,
     modelVersionId,
     sort: ImageSort.MostReactions,
     period: MetricTimeframe.AllTime,
+    limit: 10,
   };
 
-  const { data, images } = useQueryImages({ ...filters, limit: 10 });
+  const { data, images } = useQueryImages(filters);
 
   // const images = data?.pages.flatMap((x) => x.items) ?? [];
   const viewMore = data?.pages.some((x) => x.nextCursor !== undefined) ?? false;
@@ -78,7 +79,7 @@ export function ResourceReviewCarousel({
                   {({ safe }) => (
                     <Center style={{ height: '100%', width: '100%' }}>
                       <div style={{ width: '100%', position: 'relative' }}>
-                        <ImageGuard.ToggleConnect />
+                        <ImageGuard.ToggleConnect position="top-left" />
                         <ImageGuard.Report />
                         <RoutedContextLink modal="imageDetailModal" imageId={image.id} {...filters}>
                           {/* {!safe ? (
@@ -193,6 +194,9 @@ export function ResourceReviewCarousel({
             </Carousel.Slide>
           )}
         </Carousel>
+        <Text size="xs" color="dimmed" mt="xs" mb="-xs">
+          Images this user generated with this resource
+        </Text>
       </Container>
     </Box>
   );

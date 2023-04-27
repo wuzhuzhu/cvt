@@ -1,8 +1,9 @@
-import { Prisma, TagTarget } from '@prisma/client';
+import { NsfwLevel, Prisma, TagTarget } from '@prisma/client';
 import { TagVotableEntityType, VotableTagModel } from '~/libs/tags';
 import { TagSort } from '~/server/common/enums';
 
 import { dbWrite, dbRead } from '~/server/db/client';
+import { redis } from '~/server/redis/client';
 import {
   AdjustTagsSchema,
   DeleteTagsSchema,
@@ -10,9 +11,10 @@ import {
   GetVotableTagsSchema,
   ModerateTagsSchema,
 } from '~/server/schema/tag.schema';
-import { imageTagCompositeSelect, modelTagCompositSelect } from '~/server/selectors/tag.selector';
+import { imageTagCompositeSelect, modelTagCompositeSelect } from '~/server/selectors/tag.selector';
 import { getSystemTags } from '~/server/services/system-cache';
 import { userCache } from '~/server/services/user-cache.service';
+import { indexOfOr } from '~/utils/array-helpers';
 
 export const getTagWithModelCount = ({ name }: { name: string }) => {
   return dbRead.$queryRaw<[{ id: number; name: string; count: number }]>`
@@ -28,6 +30,17 @@ export const getTagWithModelCount = ({ name }: { name: string }) => {
     GROUP BY "public"."Tag"."id", "public"."Tag"."name"
     LIMIT 1 OFFSET 0;
   `;
+};
+
+export const getTag = ({ id }: { id: number }) => {
+  return dbRead.tag.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      name: true,
+      type: true,
+    },
+  });
 };
 
 export const getTags = async ({
@@ -64,16 +77,19 @@ export const getTags = async ({
       AND tot."fromTagId" IN (${Prisma.join(not)})
     )`);
   }
-  if (categories) {
-    const systemTags = await getSystemTags();
-    const categoryTag = systemTags.find((t) => t.name === `${entityType} category`.toLowerCase());
-    if (categoryTag) {
-      AND.push(Prisma.sql`EXISTS (
-        SELECT 1 FROM "TagsOnTags" tot
-        WHERE tot."toTagId" = t."id"
-        AND tot."fromTagId" = ${categoryTag.id}
-      )`);
-    }
+
+  const systemTags = await getSystemTags();
+  const categoryTags = (
+    entityType
+      ? systemTags.filter((t) => t.name === `${entityType} category`.toLowerCase())
+      : systemTags.filter((t) => t.name.endsWith('category'))
+  ).map((x) => x.id);
+  if (categories && categoryTags.length) {
+    AND.push(Prisma.sql`EXISTS (
+      SELECT 1 FROM "TagsOnTags" tot
+      WHERE tot."toTagId" = t."id"
+      AND tot."fromTagId" IN (${Prisma.join(categoryTags)})
+    )`);
   }
 
   let orderBy = `t."name" ASC`;
@@ -92,10 +108,20 @@ export const getTags = async ({
   else if (sort === TagSort.MostModels) orderBy = `r."modelCountAllTimeRank"`;
   else if (sort === TagSort.MostPosts) orderBy = `r."postCountAllTimeRank"`;
 
-  const tagsRaw = await dbRead.$queryRaw<{ id: number; name: string }[]>`
+  const isCategory =
+    !categories && !!categoryTags?.length
+      ? Prisma.sql`, EXISTS (
+        SELECT 1 FROM "TagsOnTags"
+        WHERE "fromTagId" IN (${Prisma.join(categoryTags)})
+        AND "toTagId" = t.id
+      ) "isCategory"`
+      : Prisma.sql``;
+
+  const tagsRaw = await dbRead.$queryRaw<{ id: number; name: string; isCategory?: boolean }[]>`
     SELECT
       t."id",
       t."name"
+      ${isCategory}
     FROM "Tag" t
     ${Prisma.raw(orderBy.includes('r.') ? `JOIN "TagRank" r ON r."tagId" = t."id"` : '')}
     WHERE ${Prisma.join(AND, ' AND ')}
@@ -139,7 +165,7 @@ export const getVotableTags = async ({
   if (type === 'model') {
     const tags = await dbRead.modelTag.findMany({
       where: { modelId: id, score: { gt: 0 } },
-      select: modelTagCompositSelect,
+      select: modelTagCompositeSelect,
       orderBy: { score: 'desc' },
       // take,
     });
@@ -148,6 +174,7 @@ export const getVotableTags = async ({
         ...tag,
         id: tagId,
         type: tagType,
+        nsfw: NsfwLevel.None,
         name: tagName,
       }))
     );
@@ -170,10 +197,11 @@ export const getVotableTags = async ({
       // take,
     });
     results.push(
-      ...tags.map(({ tagId, tagName, tagType, ...tag }) => ({
+      ...tags.map(({ tagId, tagName, tagType, tagNsfw, ...tag }) => ({
         ...tag,
         id: tagId,
         type: tagType,
+        nsfw: tagNsfw,
         name: tagName,
       }))
     );
@@ -193,7 +221,8 @@ export const getVotableTags = async ({
         tag.type !== 'Moderation' ||
         tag.score > 0 ||
         (tag.vote && tag.vote > 0) ||
-        (tag.needsReview && isModerator)
+        (tag.needsReview && isModerator) ||
+        (!tag.needsReview && tag.type === 'Moderation' && tag.score <= 0)
     );
   }
 
@@ -281,8 +310,10 @@ export const addTagVotes = async ({
 
 export const addTags = async ({ tags, entityIds, entityType }: AdjustTagsSchema) => {
   const isTagIds = typeof tags[0] === 'number';
+  // Explicit cast to number[] or string[] to avoid type errors
+  const castedTags = isTagIds ? (tags as number[]) : (tags as string[]);
   const tagSelector = isTagIds ? 'id' : 'name';
-  const tagIn = (isTagIds ? tags : tags.map((tag) => `'${tag}'`)).join(', ');
+  const tagIn = (isTagIds ? castedTags : castedTags.map((tag) => `'${tag}'`)).join(', ');
 
   if (entityType === 'model') {
     await dbWrite.$executeRawUnsafe(`
@@ -304,6 +335,7 @@ export const addTags = async ({ tags, entityIds, entityType }: AdjustTagsSchema)
       WHERE i."id" IN (${entityIds.join(', ')})
       ON CONFLICT ("imageId", "tagId") DO UPDATE SET "disabled" = false, "needsReview" = false, automated = false
     `);
+    updateImageNSFWLevels(entityIds);
   } else if (entityType === 'tag') {
     await dbWrite.$executeRawUnsafe(`
       INSERT INTO "TagsOnTags" ("fromTagId", "toTagId")
@@ -314,12 +346,29 @@ export const addTags = async ({ tags, entityIds, entityType }: AdjustTagsSchema)
       WHERE toTag."id" IN (${entityIds.join(', ')})
       ON CONFLICT DO NOTHING
     `);
+
+    // Clear cache for affected system tags
+    const systemTags = await getSystemTags();
+    for (const tag of systemTags) {
+      if (
+        isTagIds
+          ? !(castedTags as number[]).includes(tag.id)
+          : !(castedTags as string[]).includes(tag.name)
+      )
+        continue;
+
+      try {
+        await redis.del(`system:categories:${tag.name.replace(' category', '')}`);
+      } catch {}
+    }
   }
 };
 
 export const disableTags = async ({ tags, entityIds, entityType }: AdjustTagsSchema) => {
   const isTagIds = typeof tags[0] === 'number';
-  const tagIn = (isTagIds ? tags : tags.map((tag) => `'${tag}'`)).join(', ');
+  // Explicit cast to number[] or string[] to avoid type errors
+  const castedTags = isTagIds ? (tags as number[]) : (tags as string[]);
+  const tagIn = (isTagIds ? castedTags : castedTags.map((tag) => `'${tag}'`)).join(', ');
 
   if (entityType === 'model') {
     await dbWrite.$executeRawUnsafe(`
@@ -335,7 +384,7 @@ export const disableTags = async ({ tags, entityIds, entityType }: AdjustTagsSch
   } else if (entityType === 'image') {
     await dbWrite.$executeRawUnsafe(`
       UPDATE "TagsOnImage"
-      SET "disabled" = true, "needsReview" = false
+      SET "disabled" = true, "needsReview" = false, "disabledAt" = NOW()
       WHERE "imageId" IN (${entityIds.join(', ')})
       ${
         isTagIds
@@ -343,6 +392,7 @@ export const disableTags = async ({ tags, entityIds, entityType }: AdjustTagsSch
           : `AND "tagId" IN (SELECT id FROM "Tag" WHERE name IN (${tagIn}))`
       }
     `);
+    updateImageNSFWLevels(entityIds);
   } else if (entityType === 'tag') {
     await dbWrite.$executeRawUnsafe(`
       DELETE FROM "TagsOnTags"
@@ -368,35 +418,88 @@ export const moderateTags = async ({ entityIds, entityType, disable }: ModerateT
   } else if (entityType === 'image') {
     await dbWrite.$executeRawUnsafe(`
       UPDATE "TagsOnImage"
-      SET "disabled" = ${disable}, "needsReview" = false, "automated" = false
+      SET
+        "disabled" = ${disable},
+        "needsReview" = false,
+        "automated" = false,
+        "disabledAt" = ${disable ? 'NOW()' : 'null'}
       WHERE "needsReview" = true AND "imageId" IN (${entityIds.join(', ')})
     `);
 
     // Update nsfw baseline
-    if (disable) {
-      await dbWrite.$executeRawUnsafe(`
-        -- Update NSFW baseline
-        UPDATE "Image" SET nsfw = false
-        WHERE id IN (${entityIds.join(', ')})
-          AND NOT EXISTS (
-            SELECT 1
-            FROM "TagsOnImage" toi
-            JOIN "Tag" t ON t.id = toi."tagId" AND t.type = 'Moderation'
-            WHERE toi."imageId" = "Image".id
-              AND toi."disabled" = false
-          )
-      `);
-    }
+    if (disable) updateImageNSFWLevels(entityIds);
   }
+};
+
+const updateImageNSFWLevels = async (imageIds: number[]) => {
+  await dbWrite.$executeRawUnsafe(`
+    -- Update NSFW baseline
+    SELECT update_nsfw_levels(ARRAY[${imageIds.join(',')}]);
+  `);
 };
 
 export const deleteTags = async ({ tags }: DeleteTagsSchema) => {
   const isTagIds = typeof tags[0] === 'number';
+  // Explicit cast to number[] or string[] to avoid type errors
+  const castedTags = isTagIds ? (tags as number[]) : (tags as string[]);
   const tagSelector = isTagIds ? 'id' : 'name';
-  const tagIn = (isTagIds ? tags : tags.map((tag) => `'${tag}'`)).join(', ');
+  const tagIn = (isTagIds ? castedTags : castedTags.map((tag) => `'${tag}'`)).join(', ');
 
   await dbWrite.$executeRawUnsafe(`
     DELETE FROM "Tag"
     WHERE ${tagSelector} IN (${tagIn})
   `);
+};
+
+const colorPriority = [
+  'red',
+  'orange',
+  'yellow',
+  'green',
+  'blue',
+  'purple',
+  'pink',
+  'brown',
+  'grey',
+];
+type TypeCategory = { id: number; name: string; priority: number };
+export const getTypeCategories = async ({
+  type,
+  excludeIds,
+  limit,
+  cursor,
+}: {
+  type: 'image' | 'model' | 'post';
+  excludeIds?: number[];
+  limit?: number;
+  cursor?: number;
+}) => {
+  let categories: TypeCategory[] | undefined;
+  const categoriesCache = await redis.get(`system:categories:${type}`);
+  if (categoriesCache) categories = JSON.parse(categoriesCache);
+
+  if (!categories) {
+    const systemTags = await getSystemTags();
+    const categoryTag = systemTags.find((t) => t.name === `${type} category`);
+    if (!categoryTag) throw new Error(`${type} category tag not found`);
+    const categoriesRaw = await dbRead.tag.findMany({
+      where: { fromTags: { some: { fromTagId: categoryTag.id } } },
+      select: { id: true, name: true, color: true },
+    });
+    categories = categoriesRaw
+      .map((c) => ({
+        id: c.id,
+        name: c.name,
+        priority: indexOfOr(colorPriority, c.color ?? 'grey', colorPriority.length),
+      }))
+      .sort((a, b) => a.priority - b.priority);
+    if (categories.length) await redis.set(`system:categories:${type}`, JSON.stringify(categories));
+  }
+
+  if (excludeIds) categories = categories.filter((c) => !excludeIds.includes(c.id));
+  let start = 0;
+  if (cursor) start = categories.findIndex((c) => c.id === cursor) + 1;
+  if (limit) categories = categories.slice(start, start + limit);
+
+  return categories;
 };

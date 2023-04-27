@@ -63,19 +63,21 @@ import {
 } from 'mantine-react-table';
 import { useQueryClient } from '@tanstack/react-query';
 import { getQueryKey } from '@trpc/react-query';
+import { createServerSideProps } from '~/server/utils/server-side-helpers';
 
-export const getServerSideProps: GetServerSideProps = async (context) => {
-  const session = await getServerAuthSession(context);
-  if (!session?.user?.isModerator || session.user?.bannedAt) {
-    return {
-      redirect: {
-        destination: '/',
-        permanent: false,
-      },
-    };
-  }
-  return { props: {} };
-};
+export const getServerSideProps = createServerSideProps({
+  useSession: true,
+  resolver: async ({ session }) => {
+    if (!session?.user?.isModerator || session.user?.bannedAt) {
+      return {
+        redirect: {
+          destination: '/',
+          permanent: false,
+        },
+      };
+    }
+  },
+});
 
 const limit = constants.reportingFilterDefaults.limit;
 
@@ -484,6 +486,7 @@ const getReportLink = (report: ReportDetail) => {
   if (report.model) return `/models/${report.model.id}`;
   else if (report.review)
     return `/models/${report.review.modelId}/?modal=reviewThread&reviewId=${report.review.id}`;
+  else if (report.resourceReview) return `/reviews/${report.resourceReview.id}`;
   else if (report.comment)
     return `/models/${report.comment.modelId}/?modal=commentThread&commentId=${
       report.comment.parentId ?? report.comment.id
@@ -503,6 +506,9 @@ const getReportLink = (report: ReportDetail) => {
 function ToggleReportStatus({ id, status, size }: SetReportStatusInput & { size?: MantineSize }) {
   // TODO.Briant - create a helper function for this
   const queryClient = useQueryClient();
+  // TODO.manuel - not sure why we use useQueryClient here to optimistically update the query
+  // but doing this hotfix for now
+  const queryUtils = trpc.useContext();
 
   const { mutate, isLoading } = trpc.report.setStatus.useMutation({
     onSuccess(_, request) {
@@ -514,6 +520,15 @@ function ToggleReportStatus({ id, status, size }: SetReportStatusInput & { size?
           if (item) item.status = request.status;
         })
       );
+    },
+    onError(error) {
+      showErrorNotification({
+        title: 'Failed to set report status',
+        error: new Error(error.message),
+      });
+    },
+    async onSettled() {
+      await queryUtils.report.getAll.invalidate();
     },
   });
   const statusColor = reportStatusColorScheme[status];

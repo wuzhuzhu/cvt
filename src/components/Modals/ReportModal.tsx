@@ -11,7 +11,7 @@ import {
 } from '@mantine/core';
 
 import { showNotification, hideNotification } from '@mantine/notifications';
-import { ReportReason } from '@prisma/client';
+import { NsfwLevel, ReportReason } from '@prisma/client';
 import { IconArrowLeft } from '@tabler/icons';
 import { useMemo, useState } from 'react';
 import { AdminAttentionForm } from '~/components/Report/AdminAttentionForm';
@@ -52,7 +52,7 @@ const reports = [
       ReportEntity.Comment,
       ReportEntity.CommentV2,
       ReportEntity.Image,
-      // ReportEntity.ResourceReview,
+      ReportEntity.ResourceReview,
     ],
   },
   {
@@ -65,7 +65,7 @@ const reports = [
       ReportEntity.Comment,
       ReportEntity.CommentV2,
       ReportEntity.Image,
-      // ReportEntity.ResourceReview,
+      ReportEntity.ResourceReview,
     ],
   },
   {
@@ -169,19 +169,19 @@ const { openModal, Modal } = createContextModal<{ entityType: ReportEntity; enti
               }
 
               // review invalidate
-              if (reviewId) {
-                queryUtils.review.getDetail.setData(
-                  { id: reviewId },
-                  produce((old) => {
-                    if (old) {
-                      if (variables.reason === ReportReason.NSFW) {
-                        const index = old.images.findIndex((x) => x.id === variables.id);
-                        if (index > -1) old.images[index].nsfw = true;
-                      }
-                    }
-                  })
-                );
-              }
+              // if (reviewId) {
+              //   queryUtils.review.getDetail.setData(
+              //     { id: reviewId },
+              //     produce((old) => {
+              //       if (old) {
+              //         if (variables.reason === ReportReason.NSFW) {
+              //           const index = old.images.findIndex((x) => x.id === variables.id);
+              //           if (index > -1) old.images[index].nsfw = NsfwLevel.Mature;
+              //         }
+              //       }
+              //     })
+              //   );
+              // }
               await queryUtils.review.getAll.invalidate();
               // model invalidate
               if (modelId) {

@@ -1,7 +1,6 @@
 import { Carousel } from '@mantine/carousel';
 import {
   ActionIcon,
-  AspectRatio,
   createStyles,
   Group,
   Paper,
@@ -29,10 +28,7 @@ import { ImagesAsPostModel } from '~/server/controllers/image.controller';
 import { IconBadge } from '~/components/IconBadge/IconBadge';
 import { trpc } from '~/utils/trpc';
 import { NextLink } from '@mantine/next';
-import { useImageFilters } from '~/providers/FiltersProvider';
-import { useRouter } from 'next/router';
-import { removeEmpty } from '~/utils/object-helpers';
-import { parseImagesQuery } from '~/components/Image/image.utils';
+import { useFiltersContext } from '~/providers/FiltersProvider';
 
 export function ImagesAsPostsCard({
   data,
@@ -41,14 +37,13 @@ export function ImagesAsPostsCard({
   data: ImagesAsPostModel;
   width: number;
 }) {
-  const router = useRouter();
   const currentUser = useCurrentUser();
   const { classes, cx } = useStyles();
-  const { modelId, username, modelVersions } = useImagesAsPostsInfiniteContext();
+  const { filters, modelVersions } = useImagesAsPostsInfiniteContext();
   const modelVersionName = modelVersions?.find((x) => x.id === data.modelVersionId)?.name;
   const queryUtils = trpc.useContext();
   const postId = data.postId ?? undefined;
-  const imageFilters = useImageFilters();
+  const linkFilters = { ...filters, postId };
 
   const cover = data.images[0];
 
@@ -72,12 +67,10 @@ export function ImagesAsPostsCard({
   }, [cardWidth, data.images]);
 
   const cardHeight = imageHeight + 57 + (data.images.length > 1 ? 8 : 0);
+  const browsingMode = useFiltersContext((state) => state.browsingMode);
 
   const handleClick = () => {
-    const filters = removeEmpty(
-      parseImagesQuery({ postId, modelId, ...imageFilters, ...router.query })
-    );
-    queryUtils.image.getInfinite.setInfiniteData(filters, () => {
+    queryUtils.image.getInfinite.setInfiniteData({ ...linkFilters, browsingMode }, () => {
       return {
         pages: [{ items: data.images, nextCursor: undefined, count: undefined }],
         pageParams: [],
@@ -89,7 +82,7 @@ export function ImagesAsPostsCard({
   const carouselKey = useMemo(() => `${imageIdsString}_${cardWidth}`, [imageIdsString, cardWidth]);
 
   return (
-    <InView>
+    <InView rootMargin="200%">
       {({ inView, ref }) => (
         <MasonryCard
           withBorder
@@ -177,23 +170,13 @@ export function ImagesAsPostsCard({
                         <>
                           <div className={classes.imageContainer}>
                             <ImageGuard.Report />
-                            <ImageGuard.ToggleImage
-                              sx={(theme) => ({
-                                backgroundColor: theme.fn.rgba(theme.colors.red[9], 0.4),
-                                color: 'white',
-                                backdropFilter: 'blur(7px)',
-                                boxShadow: '1px 2px 3px -1px rgba(37,38,43,0.2)',
-                              })}
-                            />
+                            <ImageGuard.ToggleImage position="top-left" />
                             <RoutedContextLink
                               modal="imageDetailModal"
                               imageId={cover.id}
-                              modelId={modelId}
-                              postId={postId}
-                              username={username}
                               onClick={handleClick}
                               className={classes.link}
-                              {...router.query}
+                              {...linkFilters}
                             >
                               <>
                                 <Box className={classes.blur}>
@@ -289,23 +272,13 @@ export function ImagesAsPostsCard({
                             <>
                               <div className={classes.imageContainer}>
                                 <ImageGuard.Report />
-                                <ImageGuard.ToggleConnect
-                                  sx={(theme) => ({
-                                    backgroundColor: theme.fn.rgba(theme.colors.red[9], 0.4),
-                                    color: 'white',
-                                    backdropFilter: 'blur(7px)',
-                                    boxShadow: '1px 2px 3px -1px rgba(37,38,43,0.2)',
-                                  })}
-                                />
+                                <ImageGuard.ToggleConnect position="top-left" />
                                 <RoutedContextLink
                                   modal="imageDetailModal"
                                   imageId={image.id}
-                                  modelId={modelId}
-                                  postId={postId}
-                                  username={username}
                                   onClick={handleClick}
                                   className={classes.link}
-                                  {...router.query}
+                                  {...linkFilters}
                                 >
                                   <>
                                     <Box className={classes.blur}>

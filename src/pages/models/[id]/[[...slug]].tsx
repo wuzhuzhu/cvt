@@ -15,14 +15,13 @@ import {
   Title,
   Paper,
   Center,
-  Anchor,
+  Box,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { closeAllModals, openConfirmModal } from '@mantine/modals';
 import { NextLink } from '@mantine/next';
-import { ModelStatus } from '@prisma/client';
+import { ModelModifier, ModelStatus } from '@prisma/client';
 import {
-  IconArrowsSort,
   IconBan,
   IconClock,
   IconDotsVertical,
@@ -39,6 +38,10 @@ import {
   IconLock,
   IconLockOff,
   IconMessageCircleOff,
+  IconArrowsLeftRight,
+  IconArchive,
+  IconCircleMinus,
+  IconReload,
 } from '@tabler/icons';
 import truncate from 'lodash/truncate';
 import { InferGetServerSidePropsType } from 'next';
@@ -73,43 +76,52 @@ import { ReportEntity } from '~/server/schema/report.schema';
 import { getDefaultModelVersion } from '~/server/services/model-version.service';
 import { createServerSideProps } from '~/server/utils/server-side-helpers';
 import { ModelById } from '~/types/router';
-import { formatDate } from '~/utils/date-helpers';
+import { formatDate, isFutureDate } from '~/utils/date-helpers';
 import { showErrorNotification, showSuccessNotification } from '~/utils/notifications';
 import { abbreviateNumber } from '~/utils/number-helpers';
 import { scrollToTop } from '~/utils/scroll-utils';
-import { removeTags, splitUppercase } from '~/utils/string-helpers';
+import { getDisplayName, removeTags, splitUppercase } from '~/utils/string-helpers';
 import { trpc } from '~/utils/trpc';
 import { isNumber } from '~/utils/type-guards';
 import Router from 'next/router';
 import { QS } from '~/utils/qs';
 import useIsClient from '~/hooks/useIsClient';
-import { BrowsingMode, ImageSort } from '~/server/common/enums';
+import { ImageSort } from '~/server/common/enums';
 import { useQueryImages } from '~/components/Image/image.utils';
 import { CAROUSEL_LIMIT } from '~/server/common/constants';
 import { ToggleLockModel } from '~/components/Model/Actions/ToggleLockModel';
 import { unpublishReasons } from '~/server/common/moderation-helpers';
+import { ButtonTooltip } from '~/components/CivitaiWrapped/ButtonTooltip';
+import { parseBrowsingMode } from '~/server/createContext';
+import { ModelMeta } from '~/server/schema/model.schema';
+import { AlertWithIcon } from '~/components/AlertWithIcon/AlertWithIcon';
 
 export const getServerSideProps = createServerSideProps({
   useSSG: true,
-  resolver: async ({ ssg, ctx, session }) => {
+  useSession: true,
+  resolver: async ({ ssg, ctx, session = null }) => {
     const params = (ctx.params ?? {}) as { id: string; slug: string[] };
     const query = ctx.query as { modelVersionId: string };
     const id = Number(params.id);
-    const modelVersionId = query.modelVersionId ? Number(query.modelVersionId) : undefined;
-    if (!isNumber(id)) return { notFound: true };
+    if (ssg) {
+      const modelVersionId = query.modelVersionId ? Number(query.modelVersionId) : undefined;
+      if (!isNumber(id)) return { notFound: true };
 
-    const version = await getDefaultModelVersion({ modelId: id, modelVersionId }).catch(() => null);
-    if (version)
-      await ssg?.image.getInfinite.prefetchInfinite({
-        modelVersionId: version.id,
-        prioritizedUserIds: [version.model.userId],
-        period: 'AllTime',
-        sort: ImageSort.MostReactions,
-        browsingMode: session?.user ? undefined : BrowsingMode.SFW,
-        limit: CAROUSEL_LIMIT,
-      });
+      const version = await getDefaultModelVersion({ modelId: id, modelVersionId }).catch(
+        () => null
+      );
+      if (version)
+        await ssg.image.getInfinite.prefetchInfinite({
+          modelVersionId: version.id,
+          prioritizedUserIds: [version.model.userId],
+          period: 'AllTime',
+          sort: ImageSort.MostReactions,
+          limit: CAROUSEL_LIMIT,
+          browsingMode: parseBrowsingMode(ctx.req.cookies, session),
+        });
 
-    await ssg?.model.getById.prefetch({ id });
+      await ssg.model.getById.prefetch({ id });
+    }
 
     return {
       props: { id },
@@ -169,7 +181,6 @@ export default function ModelDetailsV2({
       prioritizedUserIds: model ? [model.user.id] : undefined,
       period: 'AllTime',
       sort: ImageSort.MostReactions,
-      browsingMode: currentUser ? undefined : BrowsingMode.SFW,
       limit: CAROUSEL_LIMIT,
     },
     {
@@ -320,6 +331,34 @@ export default function ModelDetailsV2({
     });
   };
 
+  const changeModeMutation = trpc.model.changeMode.useMutation();
+  const handleChangeMode = async (mode: ModelModifier | null) => {
+    const prevModel = queryUtils.model.getById.getData({ id });
+    await queryUtils.model.getById.cancel({ id });
+
+    if (prevModel)
+      queryUtils.model.getById.setData(
+        { id },
+        { ...prevModel, mode, meta: (prevModel.meta as ModelMeta) ?? null }
+      );
+
+    changeModeMutation.mutate(
+      { id, mode },
+      {
+        async onSuccess() {
+          await queryUtils.model.getById.invalidate({ id });
+        },
+        onError(error) {
+          showErrorNotification({
+            title: 'Unable to change mode',
+            error: new Error(error.message),
+          });
+          queryUtils.model.getById.setData({ id }, prevModel);
+        },
+      }
+    );
+  };
+
   useEffect(() => {
     // Change the selected modelVersion based on querystring param
     const rawVersionId = router.query.modelVersionId;
@@ -363,7 +402,9 @@ export default function ModelDetailsV2({
 
   const meta = (
     <Meta
-      title={`${model.name} | Stable Diffusion ${model.type} | Civitai`}
+      title={`${model.name}${
+        selectedVersion ? ' - ' + selectedVersion.name : ''
+      } | Stable Diffusion ${getDisplayName(model.type)} | Civitai`}
       description={truncate(removeTags(model.description ?? ''), { length: 150 })}
       image={
         nsfw || versionImages[0]?.url == null
@@ -390,6 +431,9 @@ export default function ModelDetailsV2({
   const canDiscuss =
     !isMuted && (!onlyEarlyAccess || currentUser?.isMember || currentUser?.isModerator);
   const versionCount = model.modelVersions.length;
+  const inEarlyAccess = model.earlyAccessDeadline && isFutureDate(model.earlyAccessDeadline);
+  const category = model.tagsOnModels.find(({ tag }) => !!tag.isCategory)?.tag;
+  const tags = model.tagsOnModels.filter(({ tag }) => !tag.isCategory).map((tag) => tag.tag);
 
   return (
     <>
@@ -448,7 +492,7 @@ export default function ModelDetailsV2({
                       </Text>
                     </IconBadge>
                   )}
-                  {latestVersion?.earlyAccessDeadline && (
+                  {inEarlyAccess && (
                     <IconBadge radius="sm" color="green" size="lg" icon={<IconClock size={18} />}>
                       Early Access
                     </IconBadge>
@@ -516,14 +560,32 @@ export default function ModelDetailsV2({
                         >
                           Edit Model
                         </Menu.Item>
-                        {versionCount > 1 && (
+                        {!model.mode ? (
+                          <>
+                            <Menu.Item
+                              icon={<IconArchive size={14} stroke={1.5} />}
+                              onClick={() => handleChangeMode(ModelModifier.Archived)}
+                            >
+                              Archive
+                            </Menu.Item>
+                            {isModerator && (
+                              <Menu.Item
+                                icon={<IconCircleMinus size={14} stroke={1.5} />}
+                                onClick={() => handleChangeMode(ModelModifier.TakenDown)}
+                              >
+                                Take Down
+                              </Menu.Item>
+                            )}
+                          </>
+                        ) : model.mode === ModelModifier.Archived ||
+                          (isModerator && model.mode === ModelModifier.TakenDown) ? (
                           <Menu.Item
-                            icon={<IconArrowsSort size={14} stroke={1.5} />}
-                            onClick={toggle}
+                            icon={<IconReload size={14} stroke={1.5} />}
+                            onClick={() => handleChangeMode(null)}
                           >
-                            Reorder Versions
+                            Bring Back
                           </Menu.Item>
-                        )}
+                        ) : null}
                       </>
                     )}
                     {(!currentUser || !isOwner || isModerator) && (
@@ -553,7 +615,7 @@ export default function ModelDetailsV2({
                         </Menu.Item>
                       </>
                     )}
-                    {isModerator && (
+                    {isOwner && (
                       <ToggleLockModel modelId={model.id} locked={model.locked}>
                         {({ onClick }) => (
                           <Menu.Item
@@ -578,12 +640,29 @@ export default function ModelDetailsV2({
                 <Text size="xs" color="dimmed">
                   Updated: {formatDate(model.updatedAt)}
                 </Text>
-                {model.tagsOnModels.length > 0 && <Divider orientation="vertical" />}
+                {category && (
+                  <>
+                    <Divider orientation="vertical" />
+                    <Link href={`/tag/${encodeURIComponent(category.name.toLowerCase())}`} passHref>
+                      <Badge component="a" size="sm" color="blue" sx={{ cursor: 'pointer' }}>
+                        {category.name}
+                      </Badge>
+                    </Link>
+                  </>
+                )}
+
+                {tags.length > 0 && <Divider orientation="vertical" />}
                 <Collection
-                  items={model.tagsOnModels}
-                  renderItem={({ tag }) => (
+                  items={tags}
+                  renderItem={(tag) => (
                     <Link href={`/tag/${encodeURIComponent(tag.name.toLowerCase())}`} passHref>
-                      <Badge component="a" size="sm" sx={{ cursor: 'pointer' }}>
+                      <Badge
+                        component="a"
+                        size="sm"
+                        color="gray"
+                        variant={theme.colorScheme === 'dark' ? 'filled' : undefined}
+                        sx={{ cursor: 'pointer' }}
+                      >
                         {tag.name}
                       </Badge>
                     </Link>
@@ -655,20 +734,36 @@ export default function ModelDetailsV2({
                 </Group>
               </Alert>
             )}
+            {(model.mode === ModelModifier.TakenDown || model.mode === ModelModifier.Archived) && (
+              <AlertWithIcon color="blue" icon={<IconExclamationMark />} size="md">
+                {model.mode === ModelModifier.Archived
+                  ? 'This model has been archived and is not available for download. You can still share your creations with the community.'
+                  : 'The visual assets associated with this model have been taken down. You can still download the resource, but you will not be able to share your creations.'}
+              </AlertWithIcon>
+            )}
           </Stack>
           <Group spacing={4} noWrap>
-            {isOwner || isModerator ? (
-              <Button
-                component={NextLink}
-                href={`/models/${model.id}/model-versions/create`}
-                // variant={theme.colorScheme === 'dark' ? 'filled' : 'light'}
-                variant="light"
-                color="blue"
-                leftIcon={<IconPlus size={16} />}
-                compact
-              >
-                Add Version
-              </Button>
+            {isOwner ? (
+              <>
+                <ButtonTooltip label="Add Version">
+                  <ActionIcon
+                    component={NextLink}
+                    href={`/models/${model.id}/model-versions/create`}
+                    variant="light"
+                    color="blue"
+                  >
+                    <IconPlus size={14} />
+                  </ActionIcon>
+                </ButtonTooltip>
+
+                {versionCount > 1 && (
+                  <ButtonTooltip label="Rearrange Versions">
+                    <ActionIcon onClick={toggle}>
+                      <IconArrowsLeftRight size={14} />
+                    </ActionIcon>
+                  </ButtonTooltip>
+                )}
+              </>
             ) : null}
             <ModelVersionList
               versions={model.modelVersions}
@@ -709,7 +804,6 @@ export default function ModelDetailsV2({
                         <>
                           <LoginRedirect reason="create-comment">
                             <Button
-                              className={classes.discussionActionButton}
                               leftIcon={<IconMessage size={16} />}
                               variant="outline"
                               onClick={() => openRoutedContext('commentEdit', {})}
@@ -723,7 +817,6 @@ export default function ModelDetailsV2({
                         !isMuted && (
                           <JoinPopover message="You must be a Supporter Tier member to join this discussion">
                             <Button
-                              className={classes.discussionActionButton}
                               leftIcon={<IconClock size={16} />}
                               variant="outline"
                               size="xs"
@@ -738,7 +831,7 @@ export default function ModelDetailsV2({
                   </Group>
                   <ModelDiscussionV2 modelId={model.id} />
                 </Stack>
-                <Stack spacing="md" ref={gallerySectionRef} id="gallery">
+                {/* <Stack spacing="md" ref={gallerySectionRef} id="gallery">
                   <Group spacing="xs" align="flex-end">
                     <Title order={2}>Gallery</Title>
                     <LoginRedirect reason="create-review">
@@ -756,17 +849,16 @@ export default function ModelDetailsV2({
                       </Button>
                     </LoginRedirect>
                   </Group>
-                  {/* IMAGES */}
                   <Group position="apart" spacing={0}>
                     <SortFilter type="image" />
                     <Group spacing={4}>
                       <PeriodFilter />
-                      {/* <ImageFiltersDropdown /> */}
+                      <ImageFiltersDropdown />
                     </Group>
                   </Group>
                   <ImageCategories />
-                  <ImagesAsPostsInfinite modelId={model.id} modelVersions={model.modelVersions} />
-                </Stack>
+
+                </Stack> */}
               </>
             ) : (
               <Paper p="lg" withBorder bg={`rgba(0,0,0,0.1)`}>
@@ -787,6 +879,15 @@ export default function ModelDetailsV2({
           <ReorderVersionsModal modelId={model.id} opened={opened} onClose={toggle} />
         ) : null}
       </Container>
+      {isClient && !loadingImages && !model.locked && model.mode !== ModelModifier.TakenDown && (
+        <Box ref={gallerySectionRef} id="gallery" mt="md">
+          <ImagesAsPostsInfinite
+            modelId={model.id}
+            selectedVersionId={selectedVersion?.id}
+            modelVersions={model.modelVersions}
+          />
+        </Box>
+      )}
     </>
   );
 }
@@ -807,6 +908,7 @@ const useStyles = createStyles((theme) => ({
   },
 
   title: {
+    wordBreak: 'break-word',
     [theme.fn.smallerThan('md')]: {
       fontSize: theme.fontSizes.xs * 2.4, // 24px
       width: '100%',

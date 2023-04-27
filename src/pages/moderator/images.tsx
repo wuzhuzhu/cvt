@@ -29,7 +29,6 @@ import {
   IconTrash,
 } from '@tabler/icons';
 import produce from 'immer';
-import { GetServerSideProps } from 'next';
 import Link from 'next/link';
 import { useEffect, useMemo } from 'react';
 import { useInView } from 'react-intersection-observer';
@@ -43,23 +42,24 @@ import { NoContent } from '~/components/NoContent/NoContent';
 import { PopConfirm } from '~/components/PopConfirm/PopConfirm';
 import { ImageSort } from '~/server/common/enums';
 import { ImageMetaProps } from '~/server/schema/image.schema';
-import { getServerAuthSession } from '~/server/utils/get-server-auth-session';
+import { createServerSideProps } from '~/server/utils/server-side-helpers';
 import { ImageGetInfinite } from '~/types/router';
 import { showSuccessNotification } from '~/utils/notifications';
 import { trpc } from '~/utils/trpc';
 
-export const getServerSideProps: GetServerSideProps = async (context) => {
-  const session = await getServerAuthSession(context);
-  if (!session?.user?.isModerator || session.user?.bannedAt) {
-    return {
-      redirect: {
-        destination: '/',
-        permanent: false,
-      },
-    };
-  }
-  return { props: {} };
-};
+export const getServerSideProps = createServerSideProps({
+  useSession: true,
+  resolver: async ({ session }) => {
+    if (!session?.user?.isModerator || session.user?.bannedAt) {
+      return {
+        redirect: {
+          destination: '/',
+          permanent: false,
+        },
+      };
+    }
+  },
+});
 
 const REMOVABLE_TAGS = ['child', 'teen', 'baby', 'girl', 'boy'];
 const ADDABLE_TAGS = ['anime', 'cartoon', 'comics', 'manga', 'explicit nudity', 'suggestive'];
@@ -345,10 +345,6 @@ function ImageGridItem({ data: image, width: itemWidth, selected, onSelect }: Im
             <Box sx={{ position: 'relative', height: '100%', overflow: 'hidden' }}>
               <ImageGuard.ToggleImage
                 sx={(theme) => ({
-                  backgroundColor: theme.fn.rgba(theme.colors.red[9], 0.4),
-                  color: 'white',
-                  backdropFilter: 'blur(7px)',
-                  boxShadow: '1px 2px 3px -1px rgba(37,38,43,0.2)',
                   position: 'absolute',
                   top: theme.spacing.xs,
                   left: theme.spacing.xs,

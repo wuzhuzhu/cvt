@@ -4,13 +4,14 @@ import {
   MetricTimeframe,
   CommercialUse,
   CheckpointType,
+  ModelModifier,
 } from '@prisma/client';
 import { z } from 'zod';
 import { constants } from '~/server/common/constants';
 
 import { BrowsingMode, ModelSort } from '~/server/common/enums';
-import { UnpublishReason, UnpublishReasons } from '~/server/common/moderation-helpers';
-import { getByIdSchema } from '~/server/schema/base.schema';
+import { UnpublishReason, unpublishReasons } from '~/server/common/moderation-helpers';
+import { getByIdSchema, periodModeSchema } from '~/server/schema/base.schema';
 import { modelVersionUpsertSchema } from '~/server/schema/model-version.schema';
 import { tagSchema } from '~/server/schema/tag.schema';
 import { getSanitizedStringSchema } from '~/server/schema/utils.schema';
@@ -56,6 +57,7 @@ export const getAllModelsSchema = licensingSchema.extend({
   browsingMode: z.nativeEnum(BrowsingMode).optional(),
   sort: z.nativeEnum(ModelSort).default(constants.modelFilterDefaults.sort),
   period: z.nativeEnum(MetricTimeframe).default(constants.modelFilterDefaults.period),
+  periodMode: periodModeSchema,
   rating: z
     .preprocess((val) => Number(val), z.number())
     .transform((val) => Math.floor(val))
@@ -74,6 +76,7 @@ export const getAllModelsSchema = licensingSchema.extend({
   excludedTagIds: z.array(z.number()).optional(),
   excludedImageIds: z.array(z.number()).optional(),
   needsReview: z.boolean().optional(),
+  earlyAccess: z.boolean().optional(),
 });
 
 export type GetAllModelsInput = z.input<typeof getAllModelsSchema>;
@@ -143,9 +146,10 @@ export const publishModelSchema = z.object({
 });
 
 export type UnpublishModelSchema = z.infer<typeof unpublishModelSchema>;
+const UnpublishReasons = Object.keys(unpublishReasons);
 export const unpublishModelSchema = z.object({
   id: z.number(),
-  reason: z.enum(UnpublishReasons).optional(),
+  reason: z.custom<UnpublishReason>((x) => UnpublishReasons.includes(x as string)).optional(),
 });
 
 export type ToggleModelLockInput = z.infer<typeof toggleModelLockSchema>;
@@ -158,4 +162,20 @@ export type ModelMeta = Partial<{
   unpublishedReason: UnpublishReason;
   needsReview: boolean;
   unpublishedAt: string;
+  archivedAt: string;
+  archivedBy: number;
+  takenDownAt: string;
+  takenDownBy: number;
 }>;
+
+export type ChangeModelModifierSchema = z.infer<typeof changeModelModifierSchema>;
+export const changeModelModifierSchema = z.object({
+  id: z.number(),
+  mode: z.nativeEnum(ModelModifier).nullable(),
+});
+
+export type DeclineReviewSchema = z.infer<typeof declineReviewSchema>;
+export const declineReviewSchema = z.object({
+  id: z.number(),
+  reason: z.string().optional(),
+});

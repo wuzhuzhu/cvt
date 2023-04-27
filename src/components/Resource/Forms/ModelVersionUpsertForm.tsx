@@ -87,14 +87,14 @@ export function ModelVersionUpsertForm({ model, version, children, onSubmit }: P
     },
   });
   const handleSubmit = async (data: Schema) => {
-    if (isDirty) {
+    if (isDirty || !version?.id) {
       const result = await upsertVersionMutation.mutateAsync({
         ...data,
         modelId: model?.id ?? -1,
         earlyAccessTimeFrame: Number(data.earlyAccessTimeFrame),
         trainedWords: skipTrainedWords ? [] : trainedWords,
       });
-      await queryUtils.modelVersion.getById.invalidate({ id: result.id, withFiles: true });
+      await queryUtils.modelVersion.getById.invalidate();
       if (model) await queryUtils.model.getById.invalidate({ id: model.id });
       onSubmit(result as ModelVersionUpsertInput);
     } else {
@@ -132,7 +132,7 @@ export function ModelVersionUpsertForm({ model, version, children, onSubmit }: P
             label="Name"
             placeholder="e.g.: v1.0"
             withAsterisk
-            maxLength={10}
+            maxLength={25}
           />
           <Input.Wrapper
             label="Early Access"

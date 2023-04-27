@@ -1,4 +1,4 @@
-import { MetricTimeframe } from '@prisma/client';
+import { MetricTimeframe, NsfwLevel } from '@prisma/client';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { z } from 'zod';
 
@@ -13,7 +13,7 @@ import {
   getPaginationLinks,
   getPagingData,
 } from '~/server/utils/pagination-helpers';
-import { numericString } from '~/utils/zod-helpers';
+import { booleanString, numericString } from '~/utils/zod-helpers';
 
 export const config = {
   api: {
@@ -30,6 +30,14 @@ const imagesEndpointSchema = z.object({
   username: usernameSchema.optional(),
   period: z.nativeEnum(MetricTimeframe).default(constants.galleryFilterDefaults.period),
   sort: z.nativeEnum(ImageSort).default(constants.galleryFilterDefaults.sort),
+  nsfw: z
+    .union([z.nativeEnum(NsfwLevel), booleanString()])
+    .optional()
+    .transform((value) => {
+      if (!value) return undefined;
+      if (typeof value === 'boolean') return value ? NsfwLevel.X : NsfwLevel.None;
+      return value;
+    }),
 });
 
 export default PublicEndpoint(async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -39,7 +47,7 @@ export default PublicEndpoint(async function handler(req: NextApiRequest, res: N
   const { limit, page, ...data } = reqParams.data;
   const { skip } = getPagination(limit, page);
   const { items, ...metadata } = getPagingData(
-    await getAllImages({ ...data, limit, skip, include: ['count'] }),
+    await getAllImages({ ...data, limit, skip, periodMode: 'published', include: ['count'] }),
     limit,
     page
   );
@@ -48,15 +56,25 @@ export default PublicEndpoint(async function handler(req: NextApiRequest, res: N
 
   res.status(200).json({
     items: items.map((image) => ({
-      url: getEdgeUrl(image.url, { width: 450 }),
       id: image.id,
+      url: getEdgeUrl(image.url, { width: image.width ?? 450 }),
       hash: image.hash,
       width: image.width,
       height: image.height,
-      nsfw: image.nsfw,
-      meta: image.meta,
+      nsfwLevel: image.nsfw,
+      nsfw: image.nsfw !== NsfwLevel.None,
       createdAt: image.createdAt,
       postId: image.postId,
+      stats: {
+        cryCount: image.stats?.cryCountAllTime ?? 0,
+        laughCount: image.stats?.laughCountAllTime ?? 0,
+        likeCount: image.stats?.likeCountAllTime ?? 0,
+        dislikeCount: image.stats?.dislikeCountAllTime ?? 0,
+        heartCount: image.stats?.heartCountAllTime ?? 0,
+        commentCount: image.stats?.commentCountAllTime ?? 0,
+      },
+      meta: image.meta,
+      username: image.user.username,
     })),
     metadata: {
       ...metadata,

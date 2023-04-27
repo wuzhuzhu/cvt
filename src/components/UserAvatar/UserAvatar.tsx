@@ -78,7 +78,7 @@ export function UserAvatar({
             </Group>
           )}
           {subText && (typeof subText === 'string' || subTextForce) ? (
-            <Text size={subTextSize} color="dimmed" my={-2}>
+            <Text size={subTextSize} color="dimmed" my={-2} lineClamp={1}>
               {subText}
             </Text>
           ) : (
@@ -89,8 +89,11 @@ export function UserAvatar({
     </Group>
   );
 
+  let href = `/user/${user.username}`;
+  if (!user.username) href += `?id=${user.id}`;
+
   return linkToProfile && !userDeleted ? (
-    <Link href={`/user/${user.username}`} passHref>
+    <Link href={href} passHref>
       <Anchor
         variant="text"
         className={classes.link}

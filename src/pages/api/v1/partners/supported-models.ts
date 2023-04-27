@@ -1,4 +1,4 @@
-import { Partner } from '@prisma/client';
+import { Partner, Prisma } from '@prisma/client';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { PartnerEndpoint } from '~/server/utils/endpoint-helpers';
 import { dbWrite } from '~/server/db/client';
@@ -19,13 +19,20 @@ export default PartnerEndpoint(
     await dbWrite.runStrategy.deleteMany({ where: { partnerId: partner.id } });
 
     // Set new entries
-    await dbWrite.runStrategy.createMany({
-      data: results.data.map(({ modelVersionId, runUrl: url }) => ({
-        modelVersionId,
-        url,
-        partnerId: partner.id,
-      })),
-    });
+    await dbWrite.$executeRaw`
+      INSERT INTO "RunStrategy" ("modelVersionId", "url", "partnerId")
+      SELECT "modelVersionId", "url", "partnerId"
+      FROM (
+        VALUES ${Prisma.join(
+          results.data.map(
+            ({ modelVersionId, runUrl }) =>
+              Prisma.sql`(${modelVersionId}, ${runUrl}, ${partner.id})`
+          )
+        )}
+      ) t ("modelVersionId", "url", "partnerId")
+      JOIN "ModelVersion" mv ON mv.id = t."modelVersionId"
+      ON CONFLICT DO NOTHING;
+    `;
 
     res.status(200).json({
       success: true,
